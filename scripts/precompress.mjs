@@ -55,13 +55,6 @@ async function main() {
   }
 
   const root = path.resolve(rootArgument);
-  try {
-    await fs.access(root);
-  } catch {
-    console.log(`precompress: ${root} does not exist yet, skipping`);
-    return;
-  }
-
   let compressedCount = 0;
   let sourceBytes = 0;
   let brotliBytes = 0;

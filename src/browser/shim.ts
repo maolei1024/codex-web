@@ -9,10 +9,6 @@ import {
 } from "./files";
 import { getUploadedFilePath } from "./uploaded-file-paths";
 import { reconnectDelayMs } from "./reconnect";
-import {
-  installThreadScrollVoidFix,
-  scheduleThreadScrollVoidCheck,
-} from "./thread-scroll-fix";
 
 import {
   installWorkspaceRootDialog,
@@ -443,12 +439,6 @@ if (initialRoute.browserPath) {
 
 electronShim.initialSidebarState = initialSidebarState;
 electronShim.onMemoryNavigationChanged = (navigation) => {
-  // POP restores a previous reading position and REPLACE is app-driven;
-  // only fresh PUSH navigations can land in the scroll void.
-  if (navigation.action === "PUSH") {
-    scheduleThreadScrollVoidCheck();
-  }
-
   const path = navigation.location.pathname;
   if (
     navigation.action !== "POP" &&
@@ -593,7 +583,6 @@ export const ipcRenderer = {
 
 ensureSocket();
 installBrowserFileUploadBridge();
-installThreadScrollVoidFix();
 
 let staleProbeInFlight = false;
 
