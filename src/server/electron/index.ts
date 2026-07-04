@@ -20,15 +20,28 @@ type IpcMainEvent = {
   senderFrame: {
     url: string;
   };
+  ports: unknown[];
   reply: (channel: string, ...args: unknown[]) => void;
 };
 
 type IpcMainBridgeState = {
-  broadcastToRenderer?: (message: {
-    type: "ipc-main-event";
-    channel: string;
-    args: unknown[];
-  }) => void;
+  broadcastToRenderer?: (
+    message:
+      | {
+          type: "ipc-main-event";
+          channel: string;
+          args: unknown[];
+        }
+      | {
+          type: "app-host-port-message";
+          portId: string;
+          data: unknown;
+        }
+      | {
+          type: "app-host-port-close";
+          portId: string;
+        },
+  ) => void;
   handleRendererInvoke?: (
     channel: string,
     args: unknown[],
@@ -39,6 +52,9 @@ type IpcMainBridgeState = {
     args: unknown[],
     sourceUrl?: string,
   ) => void;
+  handleRendererPortConnect?: (portId: string, channel: string) => void;
+  handleRendererPortMessage?: (portId: string, data: unknown) => void;
+  handleRendererPortClose?: (portId: string) => void;
 };
 
 function getIpcMainBridgeState(): IpcMainBridgeState {
@@ -181,6 +197,7 @@ function createIpcMainEvent(): IpcMainEvent {
     frameId: 1,
     sender: rendererWebContents,
     senderFrame: rendererMainFrame,
+    ports: [],
     reply: (channel: string, ...args: unknown[]): void => {
       getIpcMainBridgeState().broadcastToRenderer?.({
         type: "ipc-main-event",
@@ -191,6 +208,50 @@ function createIpcMainEvent(): IpcMainEvent {
   };
 
   return event;
+}
+
+// Fake Electron MessagePortMain bridged over the WebSocket. The upstream
+// app-host wiring only uses start/on(message|close)/postMessage/close.
+type BridgedPortMain = {
+  on: (event: string, listener: StubListener) => unknown;
+  once: (event: string, listener: StubListener) => unknown;
+  off: (event: string, listener: StubListener) => unknown;
+  removeListener: (event: string, listener: StubListener) => unknown;
+  start: () => void;
+  postMessage: (data: unknown) => void;
+  close: () => void;
+  emitMessage: (data: unknown) => void;
+  emitClose: () => void;
+};
+
+function createBridgedPortMain(portId: string): BridgedPortMain {
+  const emitter = createEmitterStub(`BridgedPortMain#${portId}`);
+  return {
+    on: emitter.on,
+    once: emitter.once,
+    off: emitter.off,
+    removeListener: emitter.removeListener,
+    start(): void {},
+    postMessage(data: unknown): void {
+      getIpcMainBridgeState().broadcastToRenderer?.({
+        type: "app-host-port-message",
+        portId,
+        data,
+      });
+    },
+    close(): void {
+      getIpcMainBridgeState().broadcastToRenderer?.({
+        type: "app-host-port-close",
+        portId,
+      });
+    },
+    emitMessage(data: unknown): void {
+      emitter.emit("message", { data, ports: [] });
+    },
+    emitClose(): void {
+      emitter.emit("close");
+    },
+  };
 }
 
 function createIpcMainStub(): {
@@ -228,6 +289,33 @@ function createIpcMainStub(): {
   ): void => {
     const event = createIpcMainEvent();
     emitter.emit(channel, event, ...args);
+  };
+
+  const bridgedPorts = new Map<string, BridgedPortMain>();
+
+  bridgeState.handleRendererPortConnect = (
+    portId: string,
+    channel: string,
+  ): void => {
+    log("ipcMain.portConnect", [portId, channel]);
+    const port = createBridgedPortMain(portId);
+    bridgedPorts.set(portId, port);
+    const event = createIpcMainEvent();
+    event.ports = [port];
+    emitter.emit(channel, event);
+  };
+
+  bridgeState.handleRendererPortMessage = (
+    portId: string,
+    data: unknown,
+  ): void => {
+    bridgedPorts.get(portId)?.emitMessage(data);
+  };
+
+  bridgeState.handleRendererPortClose = (portId: string): void => {
+    const port = bridgedPorts.get(portId);
+    bridgedPorts.delete(portId);
+    port?.emitClose();
   };
 
   return {

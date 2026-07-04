@@ -35,11 +35,34 @@ type RendererToMainMessage =
       requestId: string;
       directoryPath: string | null;
       directoriesOnly: boolean;
+    }
+  | {
+      type: "app-host-port-connect";
+      portId: string;
+      channel: string;
+    }
+  | {
+      type: "app-host-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "app-host-port-close";
+      portId: string;
     };
 
 type MainToRendererMessage =
   | {
       type: "ping";
+    }
+  | {
+      type: "app-host-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "app-host-port-close";
+      portId: string;
     }
   | {
       type: "ipc-main-event";
@@ -139,6 +162,7 @@ const pendingDirectoryEntries = new Map<
   }
 >();
 const rendererListeners = new Map<string, Set<IpcListener>>();
+const bridgedPorts = new Map<string, MessagePort>();
 
 function unimplemented(method: string): never {
   debugger;
@@ -163,6 +187,18 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
 
   if (message.type === "ipc-main-event") {
     emitRendererEvent(message.channel, message.args);
+    return;
+  }
+
+  if (message.type === "app-host-port-message") {
+    bridgedPorts.get(message.portId)?.postMessage(message.data);
+    return;
+  }
+
+  if (message.type === "app-host-port-close") {
+    const port = bridgedPorts.get(message.portId);
+    bridgedPorts.delete(message.portId);
+    port?.close();
     return;
   }
 
@@ -205,7 +241,11 @@ function flushOutboundQueue(): void {
 
 function failPendingRequests(reason: Error): void {
   const retained = outboundQueue.filter(
-    (message) => message.type === "ipc-renderer-send",
+    (message) =>
+      message.type === "ipc-renderer-send" ||
+      message.type === "app-host-port-connect" ||
+      message.type === "app-host-port-message" ||
+      message.type === "app-host-port-close",
   );
   outboundQueue.length = 0;
   outboundQueue.push(...retained);
@@ -523,19 +563,25 @@ export const ipcRenderer = {
     _message: unknown,
     transfer?: MessagePort[],
   ): void {
-    // MessagePorts cannot cross the WebSocket bridge. The only known caller
-    // (codex_desktop:connect-app-host, MCP app sandbox host) degrades
-    // gracefully when the port never answers; close the ports and move on.
-    console.warn(
-      `[electron-stub] ipcRenderer.postMessage(${channel}) dropped; MessagePort transfer is not supported in the browser shim`,
-    );
-    for (const port of transfer ?? []) {
-      try {
-        port.close();
-      } catch {
-        // ignore
-      }
+    // Bridge the transferred MessagePort over the WebSocket: frames from the
+    // page are forwarded as app-host-port-message, and the server side hands
+    // a fake MessagePortMain to the upstream ipcMain listener.
+    const port = transfer?.[0];
+    if (!port) {
+      return;
     }
+    requestCounter += 1;
+    const portId = `port-${requestCounter}-${Math.random().toString(36).slice(2)}`;
+    bridgedPorts.set(portId, port);
+    port.onmessage = (event: MessageEvent) => {
+      enqueueMessage({
+        type: "app-host-port-message",
+        portId,
+        data: event.data,
+      });
+    };
+    port.start();
+    enqueueMessage({ type: "app-host-port-connect", portId, channel });
   },
   sendSync(channel: string, ..._args: unknown[]): unknown {
     if (channel === "codex_desktop:get-sentry-init-options") {

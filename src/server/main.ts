@@ -52,11 +52,34 @@ type RendererToMainMessage =
       requestId: string;
       directoryPath: string | null;
       directoriesOnly: boolean;
+    }
+  | {
+      type: "app-host-port-connect";
+      portId: string;
+      channel: string;
+    }
+  | {
+      type: "app-host-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "app-host-port-close";
+      portId: string;
     };
 
 type MainToRendererMessage =
   | {
       type: "ping";
+    }
+  | {
+      type: "app-host-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "app-host-port-close";
+      portId: string;
     }
   | {
       type: "ipc-main-event";
@@ -129,6 +152,9 @@ type IpcMainBridgeState = {
   broadcastToRenderer?: (message: MainToRendererMessage) => void;
   handleRendererInvoke?: (channel: string, args: unknown[]) => Promise<unknown>;
   handleRendererSend?: (channel: string, args: unknown[]) => void;
+  handleRendererPortConnect?: (portId: string, channel: string) => void;
+  handleRendererPortMessage?: (portId: string, data: unknown) => void;
+  handleRendererPortClose?: (portId: string) => void;
 };
 
 function printUsage(): void {
@@ -465,6 +491,21 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
       if (message.type === "ipc-renderer-send") {
         bridgeState.handleRendererSend?.(message.channel, message.args);
+        return;
+      }
+
+      if (message.type === "app-host-port-connect") {
+        bridgeState.handleRendererPortConnect?.(message.portId, message.channel);
+        return;
+      }
+
+      if (message.type === "app-host-port-message") {
+        bridgeState.handleRendererPortMessage?.(message.portId, message.data);
+        return;
+      }
+
+      if (message.type === "app-host-port-close") {
+        bridgeState.handleRendererPortClose?.(message.portId);
         return;
       }
 
