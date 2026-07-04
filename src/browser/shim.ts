@@ -4,8 +4,11 @@ import {
 } from "./routes";
 import {
   handleLocalFilePickerMessage,
+  installBrowserFileUploadBridge,
   isLocalFilePickerMessage,
 } from "./files";
+import { getUploadedFilePath } from "./uploaded-file-paths";
+
 import {
   installWorkspaceRootDialog,
   openSelectWorkspaceRootDialog,
@@ -315,7 +318,8 @@ const electronShim = (window.__ELECTRON_SHIM__ ??= {});
 
 electronShim.overrideAdapter = {
   getGateOverride(e) {
-    if (e.name === "2929582856") { // codex_app_sunset
+    if (e.name === "2929582856") {
+      // codex_app_sunset
       return {
         ...e,
         value: false,
@@ -481,6 +485,7 @@ export const ipcRenderer = {
 };
 
 ensureSocket();
+installBrowserFileUploadBridge();
 
 export const contextBridge = {
   exposeInMainWorld(_key: string, _api: unknown): void {
@@ -489,7 +494,7 @@ export const contextBridge = {
 };
 
 export const webUtils = {
-  getPathForFile(_file: File): string | null {
-    return unimplemented("webUtils.getPathForFile");
+  getPathForFile(file: File): string | null {
+    return getUploadedFilePath(file);
   },
 };
