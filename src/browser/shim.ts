@@ -18,6 +18,20 @@ import {
 
 type IpcListener = (event: unknown, ...args: unknown[]) => void;
 
+// The upstream preload runs inside Electron where `process` is available and
+// reads process.platform/arch (e.g. isIntelMacBuild). Provide a minimal stand-in
+// before any of that code executes in the browser.
+const globalWithProcess = globalThis as typeof globalThis & {
+  process?: {
+    platform?: string;
+    arch?: string;
+    env?: Record<string, string | undefined>;
+  };
+};
+if (globalWithProcess.process == null) {
+  globalWithProcess.process = { platform: "linux", arch: "x64", env: {} };
+}
+
 type RendererToMainMessage =
   | {
       type: "ipc-renderer-invoke";
