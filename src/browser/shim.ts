@@ -533,6 +533,10 @@ export const ipcRenderer = {
       return buildFlavor;
     }
 
+    if (channel === "codex_desktop:get-uses-owl-app-shell") {
+      return false;
+    }
+
     if (channel === "codex_desktop:get-shared-object-snapshot") {
       return {
         host_config: {
