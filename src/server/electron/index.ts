@@ -509,6 +509,18 @@ class BrowserWindow {
     return BrowserWindow.allWindows.filter((window) => !window.destroyed);
   }
 
+  static fromWebContents(webContents: unknown): BrowserWindow | null {
+    log("BrowserWindow.fromWebContents", []);
+    return (
+      BrowserWindow.allWindows.find(
+        (window) => !window.destroyed && window.webContents === webContents,
+      ) ??
+      BrowserWindow.getFocusedWindow() ??
+      BrowserWindow.getAllWindows()[0] ??
+      null
+    );
+  }
+
   static getFocusedWindow(): BrowserWindow | null {
     log("BrowserWindow.getFocusedWindow", []);
     if (
