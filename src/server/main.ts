@@ -447,6 +447,8 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     });
 
     socket.on("message", (rawData) => {
+      missedPings.set(socket, 0);
+
       let message: RendererToMainMessage;
       try {
         message = JSON.parse(String(rawData)) as RendererToMainMessage;
@@ -526,6 +528,13 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
   setInterval(() => {
     for (const socket of sockets) {
+      if (socket.bufferedAmount > 0) {
+        // A large frame is still draining; pings queue behind it and the
+        // pong cannot arrive until it is through, so missed pongs are not a
+        // liveness signal here.
+        missedPings.set(socket, 0);
+        continue;
+      }
       const missed = missedPings.get(socket) ?? 0;
       if (missed >= MAX_MISSED_PONGS) {
         socket.terminate();
