@@ -303,6 +303,20 @@ const appBase = {
     appendSwitch(name: string, value?: string): void {
       log("app.commandLine.appendSwitch", [name, value]);
     },
+    appendArgument(value: string): void {
+      log("app.commandLine.appendArgument", [value]);
+    },
+    hasSwitch(name: string): boolean {
+      log("app.commandLine.hasSwitch", [name]);
+      return false;
+    },
+    getSwitchValue(name: string): string {
+      log("app.commandLine.getSwitchValue", [name]);
+      return "";
+    },
+    removeSwitch(name: string): void {
+      log("app.commandLine.removeSwitch", [name]);
+    },
   },
   on(event: string, listener: (...args: unknown[]) => void): unknown {
     log("app.on", [event, listener]);
@@ -833,6 +847,14 @@ const webContents = {
   fromId(id: number): undefined {
     log("webContents.fromId", [id]);
     return undefined;
+  },
+  getFocusedWebContents(): null {
+    log("webContents.getFocusedWebContents", []);
+    return null;
+  },
+  getAllWebContents(): unknown[] {
+    log("webContents.getAllWebContents", []);
+    return [];
   },
 };
 class MessageChannelMain {
