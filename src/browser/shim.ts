@@ -72,11 +72,6 @@ type MainToRendererMessage =
     };
 
 const CLIENT_STALE_TIMEOUT_MS = 45_000;
-// A single huge frame (a large thread transcript) head-of-line blocks all
-// other traffic on the socket, so prolonged silence alone does not prove the
-// connection is dead. Silence only triggers an HTTP probe; the socket is
-// killed when the probe fails or after this hard cap.
-const CLIENT_STALE_HARD_TIMEOUT_MS = 240_000;
 const STALENESS_CHECK_INTERVAL_MS = 10_000;
 const AUTH_PROBE_FAILURE_INTERVAL = 5;
 const DISCONNECT_ERROR_MESSAGE =
@@ -584,54 +579,23 @@ export const ipcRenderer = {
 ensureSocket();
 installBrowserFileUploadBridge();
 
-let staleProbeInFlight = false;
-
-function forceStaleReconnect(): void {
+window.setInterval(() => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  if (Date.now() - lastMessageAtMs <= CLIENT_STALE_TIMEOUT_MS) {
+    return;
+  }
   console.warn("[electron-stub] IPC bridge connection stale; forcing reconnect");
   const staleSocket = socket;
   socket = null;
-  staleSocket?.close();
+  staleSocket.close();
   failPendingRequests(
     new Error(
       "[electron-stub] IPC bridge connection went stale; the connection is being retried",
     ),
   );
   scheduleReconnect();
-}
-
-window.setInterval(() => {
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    return;
-  }
-  const silentForMs = Date.now() - lastMessageAtMs;
-  if (silentForMs <= CLIENT_STALE_TIMEOUT_MS) {
-    return;
-  }
-  if (silentForMs > CLIENT_STALE_HARD_TIMEOUT_MS) {
-    forceStaleReconnect();
-    return;
-  }
-  if (staleProbeInFlight) {
-    return;
-  }
-  staleProbeInFlight = true;
-  void fetch("/", { method: "HEAD", cache: "no-store" })
-    .then((response) => {
-      if (response.status === 401) {
-        console.error(
-          "[electron-stub] IPC bridge auth rejected; reloading to show sign-in instructions",
-        );
-        window.location.reload();
-      }
-      // Server reachable: the socket is most likely mid-transfer of a large
-      // frame. Leave it alone until the hard cap.
-    })
-    .catch(() => {
-      forceStaleReconnect();
-    })
-    .finally(() => {
-      staleProbeInFlight = false;
-    });
 }, STALENESS_CHECK_INTERVAL_MS);
 
 window.addEventListener("online", reconnectNow);
