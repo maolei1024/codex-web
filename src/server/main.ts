@@ -368,11 +368,12 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     preCompressed: true,
     maxAge: "1y",
     immutable: true,
-    setHeaders: (res, filePath) => {
-      if (path.basename(filePath).startsWith("preload.js")) {
-        res.setHeader("cache-control", "no-cache");
-      }
-    },
+  });
+
+  app.addHook("onSend", async (request, reply) => {
+    if (request.url.startsWith("/assets/preload.js")) {
+      reply.header("cache-control", "no-cache");
+    }
   });
 
   await app.register(fastifyStatic, {
