@@ -518,6 +518,25 @@ export const ipcRenderer = {
       args,
     });
   },
+  postMessage(
+    channel: string,
+    _message: unknown,
+    transfer?: MessagePort[],
+  ): void {
+    // MessagePorts cannot cross the WebSocket bridge. The only known caller
+    // (codex_desktop:connect-app-host, MCP app sandbox host) degrades
+    // gracefully when the port never answers; close the ports and move on.
+    console.warn(
+      `[electron-stub] ipcRenderer.postMessage(${channel}) dropped; MessagePort transfer is not supported in the browser shim`,
+    );
+    for (const port of transfer ?? []) {
+      try {
+        port.close();
+      } catch {
+        // ignore
+      }
+    }
+  },
   sendSync(channel: string, ..._args: unknown[]): unknown {
     if (channel === "codex_desktop:get-sentry-init-options") {
       return {
