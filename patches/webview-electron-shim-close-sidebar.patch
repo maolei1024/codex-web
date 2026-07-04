@@ -1,34 +1,36 @@
---- a/webview/assets/settings-back-route-C5YW47j2.js
-+++ b/webview/assets/settings-back-route-C5YW47j2.js
-@@ -1,5 +1,6 @@
-+import { s as g } from "./chunk-Bj-mKKzh.js";
- import { Gn as e, Qn as t } from "./apps-Au-fp4y1.js";
--import { t as n } from "./jsx-runtime-Bj4hVTj7.js";
-+import { n as _, t as n } from "./jsx-runtime-Bj4hVTj7.js";
- import { t as r } from "./clsx-Duxel1Jl.js";
+--- a/webview/assets/app-initial~app-main~settings-page-xBxCLW__.js
++++ b/webview/assets/app-initial~app-main~settings-page-xBxCLW__.js
+@@ -1,4 +1,4 @@
+-import { n as e } from "./rolldown-runtime-Czos8NxU.js";
++import { n as e, s as Vs } from "./rolldown-runtime-Czos8NxU.js";
  import {
-   J as i,
-@@ -9,7 +10,8 @@
-   y as c,
- } from "./vscode-api-DH_DWhkY.js";
- import { t as l } from "./badge-0UPLZdLW.js";
--var u = s();
-+var u = s(),
-+  v = g(_());
- function d() {
-   let n = (0, u.c)(3),
-     r = o(a),
-@@ -24,7 +26,12 @@
-       (n[0] = r),
-       (n[1] = i),
-       (n[2] = s)),
--    c(`toggle-sidebar`, i, s));
-+    c(`toggle-sidebar`, i, s),
-+    v.useEffect(() => {
+   Ah as t,
+   Cu as n,
+@@ -33,6 +33,7 @@
+   iU as D,
+   ju as ie,
+   ku as O,
++  lZ as Ur,
+   mH as k,
+   nw as A,
+   oU as ae,
+@@ -67,11 +68,17 @@
+   f(`toggleSidebar`, i);
+   let o;
+   (e[2] === n ? (o = e[3]) : ((o = [n]), (e[2] = n), (e[3] = o)),
+-    b(`toggle-sidebar`, i, o));
++    b(`toggle-sidebar`, i, o),
++    Wr.useEffect(() => {
 +      window.__ELECTRON_SHIM__.closeSidebar = () => {
-+        t(r, !1);
++        t(n, !1);
 +      };
-+    }, [r]));
++    }, [n]));
  }
- var f = n();
- function p(e) {
+ var U,
++  Wr,
+   W = e(() => {
+-    ((U = E()), s(), l(), F(), r(), y());
++    ((U = E()), (Wr = Vs(Ur(), 1)), s(), l(), F(), r(), y());
+   }),
+   G,
+   ce = e(() => {

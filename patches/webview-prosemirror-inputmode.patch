@@ -1,24 +1,29 @@
---- a/webview/assets/prosemirror-DbRBBq50.js
-+++ b/webview/assets/prosemirror-DbRBBq50.js
-@@ -25553,6 +25553,13 @@
-   let o = new EventTarget(),
-     s = new Sp(),
-     c = a,
+--- a/webview/assets/app-initial~app-main~worktree-init-v2-page~remote-conversation-page~onboarding-page~hotkey-~ke3yc5wu-BLQiF1Gs.js
++++ b/webview/assets/app-initial~app-main~worktree-init-v2-page~remote-conversation-page~onboarding-page~hotkey-~ke3yc5wu-BLQiF1Gs.js
+@@ -176884,8 +176889,18 @@
+     d = new EventTarget(),
+     f = new Epn(),
+     p = o,
 +    inputModeDisabled = !1,
-+    getAttributes = () => (inputModeDisabled ? {} : { inputmode: `none` }),
++    getAttributes = () =>
++      inputModeDisabled
++        ? { spellcheck: `true` }
++        : { spellcheck: `true`, inputmode: `none` },
 +    setPointerInputMode = (e) => {
 +      inputModeDisabled !== e &&
 +        ((inputModeDisabled = e),
-+        l.isDestroyed || l.setProps({ attributes: getAttributes }));
++        m.isDestroyed || m.setProps({ attributes: getAttributes }));
 +    },
-     l = new of(null, {
-       state: zi.create({
-         schema: yp,
-@@ -25635,6 +25642,18 @@
-         let t = l.state.apply(e);
-         (l.updateState(t), o.dispatchEvent(new Event(Ki)));
-       },
+     m = new nfn(null, {
+-      attributes: { spellcheck: `true` },
 +      attributes: getAttributes,
+       state: Von.create({
+         schema: a7,
+         doc:
+@@ -176962,6 +176977,17 @@
+         let t = m.state.apply(e);
+         (m.updateState(t), d.dispatchEvent(new Event(g8)));
+       },
 +      handleDOMEvents: {
 +        mousedown(e, t) {
 +          return (setPointerInputMode(!0), !1);

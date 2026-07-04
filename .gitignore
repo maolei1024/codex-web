@@ -1,3 +1,4 @@
 node_modules/
 scratch*/
 sentry
+.claude/settings.local.json

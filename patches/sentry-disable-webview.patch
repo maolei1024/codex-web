@@ -1,10 +1,10 @@
---- a/webview/assets/apps-Au-fp4y1.js
-+++ b/webview/assets/apps-Au-fp4y1.js
-@@ -30402,6 +30402,7 @@
-     n = ne(e.appVersion),
+--- a/webview/assets/app-initial~app-main~worktree-init-v2-page~appgen-settings-page~page~appgen-page~remote-con~lblzrcac-CGLvIrB3.js
++++ b/webview/assets/app-initial~app-main~worktree-init-v2-page~appgen-settings-page~page~appgen-page~remote-con~lblzrcac-CGLvIrB3.js
+@@ -13897,6 +13897,7 @@
+     n = R(e.appVersion),
      r = e.buildFlavor !== `prod`;
-   (Yw({
+   (Lw({
 +    enabled: !1,
-     dsn: re,
-     environment: Qw,
-     release: w(n.version),
+     beforeSend: ot,
+     dsn: On,
+     environment: Gw,
