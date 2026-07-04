@@ -29,6 +29,13 @@ type UploadedFile = {
 const replayedFileEvent = Symbol("codex-web-replayed-file-event");
 let fileUploadBridgeInstalled = false;
 
+const UPLOAD_ATTEMPTS = 2;
+const UPLOAD_RETRY_DELAY_MS = 1_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function openBrowserFilePicker({
   allowMultiple,
   imagesOnly,
@@ -109,16 +116,35 @@ async function uploadFiles(files: readonly File[]): Promise<UploadedFile[]> {
     formData.append("files", file, file.name || "upload");
   }
 
-  const response = await fetch(uploadUrl, {
-    method: "POST",
-    body: formData,
-  });
+  // Retry only network-level failures; HTTP error statuses (401, 413, 500)
+  // are deliberate server answers and are never retried.
+  let lastError: unknown = new Error("upload failed");
+  for (let attempt = 0; attempt < UPLOAD_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await delay(UPLOAD_RETRY_DELAY_MS);
+    }
 
-  if (!response.ok) {
-    throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+    let response: Response;
+    try {
+      response = await fetch(uploadUrl, {
+        method: "POST",
+        body: formData,
+      });
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Upload failed: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    return (await response.json()).files;
   }
 
-  return (await response.json()).files;
+  throw lastError;
 }
 
 export function installBrowserFileUploadBridge(): void {

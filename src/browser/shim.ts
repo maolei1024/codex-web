@@ -8,6 +8,7 @@ import {
   isLocalFilePickerMessage,
 } from "./files";
 import { getUploadedFilePath } from "./uploaded-file-paths";
+import { reconnectDelayMs } from "./reconnect";
 
 import {
   installWorkspaceRootDialog,
@@ -38,6 +39,9 @@ type RendererToMainMessage =
 
 type MainToRendererMessage =
   | {
+      type: "ping";
+    }
+  | {
       type: "ipc-main-event";
       channel: string;
       args: unknown[];
@@ -67,7 +71,11 @@ type MainToRendererMessage =
       errorMessage: string;
     };
 
-const RECONNECT_DELAY_MS = 1_000;
+const CLIENT_STALE_TIMEOUT_MS = 45_000;
+const STALENESS_CHECK_INTERVAL_MS = 10_000;
+const AUTH_PROBE_FAILURE_INTERVAL = 5;
+const DISCONNECT_ERROR_MESSAGE =
+  "[electron-stub] IPC bridge disconnected before the response arrived; the connection is being retried";
 
 type MemoryNavigationChange = {
   action: "POP" | "PUSH" | "REPLACE";
@@ -111,6 +119,10 @@ declare const __CODEX_APP_VERSION__: string;
 let requestCounter = 0;
 let socket: WebSocket | null = null;
 let reconnectTimeoutId: number | null = null;
+let reconnectAttempt = 0;
+let lastMessageAtMs = Date.now();
+let consecutiveConnectFailures = 0;
+let authProbeInFlight = false;
 const outboundQueue: RendererToMainMessage[] = [];
 const pendingInvokes = new Map<
   string,
@@ -145,6 +157,10 @@ export function emitRendererEvent(channel: string, args: unknown[]): void {
 }
 
 function handleIncomingMessage(message: MainToRendererMessage): void {
+  if (message.type === "ping") {
+    return;
+  }
+
   if (message.type === "ipc-main-event") {
     emitRendererEvent(message.channel, message.args);
     return;
@@ -187,14 +203,65 @@ function flushOutboundQueue(): void {
   }
 }
 
+function failPendingRequests(reason: Error): void {
+  const retained = outboundQueue.filter(
+    (message) => message.type === "ipc-renderer-send",
+  );
+  outboundQueue.length = 0;
+  outboundQueue.push(...retained);
+
+  for (const pending of pendingInvokes.values()) {
+    pending.reject(reason);
+  }
+  pendingInvokes.clear();
+  for (const pending of pendingDirectoryEntries.values()) {
+    pending.reject(reason);
+  }
+  pendingDirectoryEntries.clear();
+}
+
 function scheduleReconnect(): void {
   if (reconnectTimeoutId !== null) {
     return;
   }
+  const delay = reconnectDelayMs(reconnectAttempt);
+  reconnectAttempt += 1;
   reconnectTimeoutId = window.setTimeout(() => {
     reconnectTimeoutId = null;
     ensureSocket();
-  }, RECONNECT_DELAY_MS);
+  }, delay);
+}
+
+function reconnectNow(): void {
+  if (reconnectTimeoutId !== null) {
+    window.clearTimeout(reconnectTimeoutId);
+    reconnectTimeoutId = null;
+  }
+  reconnectAttempt = 0;
+  ensureSocket();
+}
+
+function maybeProbeAuthFailure(): void {
+  if (consecutiveConnectFailures % AUTH_PROBE_FAILURE_INTERVAL !== 0) {
+    return;
+  }
+  if (authProbeInFlight) {
+    return;
+  }
+  authProbeInFlight = true;
+  void fetch("/", { method: "HEAD", cache: "no-store" })
+    .then((response) => {
+      if (response.status === 401) {
+        console.error(
+          "[electron-stub] IPC bridge auth rejected; reloading to show sign-in instructions",
+        );
+        window.location.reload();
+      }
+    })
+    .catch(() => {})
+    .finally(() => {
+      authProbeInFlight = false;
+    });
 }
 
 function ensureSocket(): void {
@@ -206,13 +273,27 @@ function ensureSocket(): void {
     return;
   }
 
-  socket = new WebSocket(
+  const currentSocket = new WebSocket(
     `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/__backend/ipc`,
   );
-  socket.addEventListener("open", () => {
+  socket = currentSocket;
+  let opened = false;
+
+  currentSocket.addEventListener("open", () => {
+    if (socket !== currentSocket) {
+      return;
+    }
+    opened = true;
+    reconnectAttempt = 0;
+    consecutiveConnectFailures = 0;
+    lastMessageAtMs = Date.now();
     flushOutboundQueue();
   });
-  socket.addEventListener("message", (event) => {
+  currentSocket.addEventListener("message", (event) => {
+    if (socket !== currentSocket) {
+      return;
+    }
+    lastMessageAtMs = Date.now();
     try {
       const message = JSON.parse(String(event.data)) as MainToRendererMessage;
       handleIncomingMessage(message);
@@ -223,10 +304,21 @@ function ensureSocket(): void {
       );
     }
   });
-  socket.addEventListener("close", () => {
+  currentSocket.addEventListener("close", () => {
+    if (socket !== currentSocket) {
+      return;
+    }
+    if (!opened) {
+      consecutiveConnectFailures += 1;
+      maybeProbeAuthFailure();
+    }
+    failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
     scheduleReconnect();
   });
-  socket.addEventListener("error", () => {
+  currentSocket.addEventListener("error", () => {
+    if (socket !== currentSocket) {
+      return;
+    }
     scheduleReconnect();
   });
 }
@@ -486,6 +578,32 @@ export const ipcRenderer = {
 
 ensureSocket();
 installBrowserFileUploadBridge();
+
+window.setInterval(() => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  if (Date.now() - lastMessageAtMs <= CLIENT_STALE_TIMEOUT_MS) {
+    return;
+  }
+  console.warn("[electron-stub] IPC bridge connection stale; forcing reconnect");
+  const staleSocket = socket;
+  socket = null;
+  staleSocket.close();
+  failPendingRequests(
+    new Error(
+      "[electron-stub] IPC bridge connection went stale; the connection is being retried",
+    ),
+  );
+  scheduleReconnect();
+}, STALENESS_CHECK_INTERVAL_MS);
+
+window.addEventListener("online", reconnectNow);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    reconnectNow();
+  }
+});
 
 export const contextBridge = {
   exposeInMainWorld(_key: string, _api: unknown): void {

@@ -75,13 +75,74 @@ nix shell github:0xcaff/codex-web github:0xcaff/codex-web#codex_remote_proxy -c 
 
 ## security
 
-run `codex-web` only on trusted networks. treat anyone who can reach the
-`codex-web` server as someone who can operate codex on the host machine as the
-same user running the server.
+treat anyone who can reach the `codex-web` server as someone who can operate
+codex on the host machine as the same user running the server.
 
-if you need authn or authz, implement it outside of `codex-web`: proxy it through
-wireguard, tailscale, or an ssh tunnel and put an authentication gateway or
-reverse proxy in front.
+### token auth
+
+for exposure beyond localhost, `codex-web` requires a fixed access token:
+
+```bash
+codex-web --host 0.0.0.0 --token my-secret-token
+# or: CODEX_WEB_TOKEN=my-secret-token codex-web --host 0.0.0.0
+```
+
+binding to a non-loopback host without a token is refused at startup.
+localhost stays token-free unless a token is configured.
+
+to sign in, open `https://your-host/?token=my-secret-token` once. the server
+sets an http-only cookie, redirects to strip the token from the url, and every
+subsequent request (pages, assets, uploads, the websocket bridge) is
+authenticated by that cookie.
+
+when exposing to the public internet, terminate TLS in a reverse proxy
+(caddy, nginx, cloudflare tunnel, ...) in front of `codex-web`. the proxy must
+forward the `Upgrade`/`Connection` headers (websocket) and `X-Forwarded-Proto`
+(so the auth cookie is marked `Secure`). sending the token over plain public
+http leaks it.
+
+uploads are capped at 100mb by default; tune with `--max-upload-bytes` or
+`CODEX_WEB_MAX_UPLOAD_BYTES`.
+
+alternatively, keep it off the public internet entirely: proxy through
+wireguard, tailscale, or an ssh tunnel.
+
+### reverse proxy (nginx)
+
+proxy everything to `codex-web` — do **not** point nginx `root`/`try_files`
+at the webview directory and do **not** enable `proxy_cache` for it: both
+serve content without going through token auth. static assets are already
+fast from the app server: content-hashed bundles get
+`cache-control: immutable` (repeat visits skip the download entirely) and are
+served pre-compressed (brotli/gzip, generated at build time).
+
+```nginx
+map $http_upgrade $connection_upgrade {
+  default upgrade;
+  ""      close;
+}
+
+server {
+  listen 443 ssl;
+  http2 on;
+  server_name codex.example.com;
+
+  # ssl_certificate     /path/fullchain.pem;
+  # ssl_certificate_key /path/privkey.pem;
+
+  client_max_body_size 100m;  # keep in sync with --max-upload-bytes
+
+  location / {
+    proxy_pass http://127.0.0.1:8214;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 300s;  # websocket idle; the server pings every 20s
+  }
+}
+```
 
 someone with access to the web ui may be able to:
 

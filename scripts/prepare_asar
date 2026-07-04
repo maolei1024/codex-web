@@ -39,3 +39,4 @@ patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-sta
 patch --batch --forward --strip 1 --directory scratch/asar < patches/sentry-disable-shell.patch
 patch --batch --forward --strip 1 --directory scratch/asar < patches/sentry-disable-webview.patch
 rm -rf scratch/asar/node_modules/better-sqlite3
+node scripts/precompress.mjs scratch/asar/webview
