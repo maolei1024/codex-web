@@ -472,6 +472,18 @@ class BrowserWindow {
           if (sendArgs.length === 0 || typeof sendArgs[0] !== "string") {
             return;
           }
+          // Only the primary (first live) window has a renderer in the web
+          // deployment: every browser tab plays the role of that window's
+          // webview. Upstream registers secondary shell windows (hotkey
+          // overlay, dictation, debug) as app-server listeners too, so each
+          // broadcast notification is sent once per window — forwarding all
+          // of them would deliver duplicate stream deltas to every tab.
+          const primary = BrowserWindow.allWindows.find(
+            (window) => !window.destroyed,
+          );
+          if (primary !== this) {
+            return;
+          }
           const [channel, ...args] = sendArgs as [string, ...unknown[]];
           getIpcMainBridgeState().broadcastToRenderer?.({
             type: "ipc-main-event",
