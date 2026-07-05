@@ -178,6 +178,44 @@ const pendingDirectoryEntries = new Map<
 const rendererListeners = new Map<string, Set<IpcListener>>();
 const bridgedPorts = new Map<string, MessagePort>();
 
+const MESSAGE_FOR_VIEW_CHANNEL = "codex_desktop:message-for-view";
+// Broadcast events missed while the WebSocket was down (turn/completed,
+// thread/status/changed, ...) are never replayed by the server, and the
+// upstream reconnect-recovery machinery only listens to app-server transport
+// events — it knows nothing about our browser<->server link. Synthesizing
+// codex-app-server-initialized after a reconnect drives the upstream
+// app_server_restart_recovery path: query invalidation, an authoritative
+// thread/list refresh, mark-all-conversations-need-resume and a resume of the
+// currently open conversation. Prefer replaying the last genuine payload when
+// one was observed (server restart while the page was open); otherwise fall
+// back to values matching the deployed codex-cli.
+let hasConnectedBefore = false;
+let reconnectRecoveryTimeoutId: number | null = null;
+let cachedAppServerInitializedMessage: Record<string, unknown> = {
+  type: "codex-app-server-initialized",
+  hostId: "local",
+  appServerVersion: "0.142.5",
+  installedCodexVersion: "0.142.5",
+};
+
+function scheduleReconnectRecovery(): void {
+  if (reconnectRecoveryTimeoutId !== null) {
+    window.clearTimeout(reconnectRecoveryTimeoutId);
+  }
+  reconnectRecoveryTimeoutId = window.setTimeout(() => {
+    reconnectRecoveryTimeoutId = null;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    console.info(
+      "[electron-stub] IPC bridge reconnected; triggering app-server recovery",
+    );
+    emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [
+      cachedAppServerInitializedMessage,
+    ]);
+  }, 2_000);
+}
+
 function unimplemented(method: string): never {
   debugger;
   throw new Error(`[electron-stub] ${method} is not implemented`);
@@ -200,6 +238,16 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
   }
 
   if (message.type === "ipc-main-event") {
+    if (message.channel === MESSAGE_FOR_VIEW_CHANNEL) {
+      const payload = message.args[0];
+      if (
+        isRecord(payload) &&
+        payload.type === "codex-app-server-initialized" &&
+        payload.hostId === "local"
+      ) {
+        cachedAppServerInitializedMessage = payload;
+      }
+    }
     emitRendererEvent(message.channel, message.args);
     return;
   }
@@ -342,6 +390,10 @@ function ensureSocket(): void {
     consecutiveConnectFailures = 0;
     lastMessageAtMs = Date.now();
     flushOutboundQueue();
+    if (hasConnectedBefore) {
+      scheduleReconnectRecovery();
+    }
+    hasConnectedBefore = true;
   });
   currentSocket.addEventListener("message", (event) => {
     if (socket !== currentSocket) {
@@ -428,6 +480,20 @@ function isUnhandledAddWorkspaceRootOptionMessage(value: unknown): value is {
     isRecord(value) &&
     value.type === "electron-add-new-workspace-root-option" &&
     typeof value.root !== "string"
+  );
+}
+
+// 26.623's Create-project modal and onboarding flow ask the Electron main
+// process to open a native directory picker (dialog.showOpenDialog) via this
+// message; the pickers reply with a workspace-root-option-picked view message
+// per selected directory. In the browser we substitute our own host-directory
+// dialog and synthesize the reply locally.
+function isPickWorkspaceRootOptionMessage(value: unknown): value is {
+  allowMultiple?: unknown;
+  type: "electron-pick-workspace-root-option";
+} {
+  return (
+    isRecord(value) && value.type === "electron-pick-workspace-root-option"
   );
 }
 
@@ -536,6 +602,19 @@ export const ipcRenderer = {
           }
 
           return invokeMain(channel, [{ ...args[0], root }]);
+        });
+      }
+
+      if (isPickWorkspaceRootOptionMessage(args[0])) {
+        return openSelectWorkspaceRootDialog({
+          listDirectory: requestWorkspaceDirectoryEntries,
+        }).then((root) => {
+          if (root) {
+            emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [
+              { type: "workspace-root-option-picked", root },
+            ]);
+          }
+          return undefined;
         });
       }
     }
