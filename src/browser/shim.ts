@@ -8,6 +8,7 @@ import {
   isLocalFilePickerMessage,
 } from "./files";
 import { getUploadedFilePath } from "./uploaded-file-paths";
+import { installMobileViewportGuard } from "./mobile-viewport";
 import { reconnectDelayMs } from "./reconnect";
 
 import {
@@ -740,6 +741,7 @@ export const ipcRenderer = {
 
 ensureSocket();
 installBrowserFileUploadBridge();
+installMobileViewportGuard();
 
 window.setInterval(() => {
   if (!socket || socket.readyState !== WebSocket.OPEN) {

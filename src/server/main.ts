@@ -16,6 +16,7 @@ import {
   installAuthHook,
   isAuthorizedRequest,
 } from "./auth";
+import { sanitizeMcpRequestPaths } from "./mcp-request-path-sanitizer";
 
 type ServerOptions = {
   host: string;
@@ -261,6 +262,19 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+function sanitizeOutboundMcpRequestArgs(args: unknown[]): void {
+  for (const argument of args) {
+    const result = sanitizeMcpRequestPaths(argument, os.homedir());
+    if (result) {
+      for (const change of result.changes) {
+        console.log(
+          `[mcp-request-sanitizer] ${result.method} ${change.key}: ${JSON.stringify(change.before)} -> ${change.after === null ? "dropped" : JSON.stringify(change.after)}`,
+        );
+      }
+    }
+  }
+}
+
 async function getWorkspaceDirectoryEntries({
   directoryPath,
   directoriesOnly,
@@ -490,6 +504,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       }
 
       if (message.type === "ipc-renderer-send") {
+        sanitizeOutboundMcpRequestArgs(message.args);
         bridgeState.handleRendererSend?.(message.channel, message.args);
         return;
       }
@@ -539,6 +554,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
       if (message.type === "ipc-renderer-invoke") {
         const { channel, requestId, args } = message;
+        sanitizeOutboundMcpRequestArgs(args);
         Promise.resolve(
           bridgeState.handleRendererInvoke?.(channel, args) ??
             Promise.reject(

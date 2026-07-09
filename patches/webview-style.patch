@@ -1,12 +1,64 @@
 --- a/webview/index.html
 +++ b/webview/index.html
-@@ -118,6 +118,11 @@
+@@ -118,6 +118,63 @@
          }
        }
      </style>
 +    <style>
 +      .main-surface {
 +        --spacing-token-safe-header-left: 0px;
++      }
++
++      /*
++        codex-web mobile fixes. The app stylesheet sizes #root with 100vh,
++        which overflows mobile browsers whenever the URL bar is visible and
++        leaves the composer's bottom action bar below the screen. Prefer the
++        dynamic viewport height, and while the software keyboard is open
++        (attribute + variables set by the preload shim, see
++        src/browser/mobile-viewport.ts) pin the app to the visible height so
++        in-flow bottom UI stays above the keyboard.
++      */
++      html #root {
++        height: 100%;
++        height: 100dvh;
++      }
++      html[data-codex-web-keyboard="open"] #root {
++        height: var(--codex-web-visual-viewport-height, 100dvh);
++      }
++
++      /* Upstream only disables this under [data-codex-window-type=electron],
++         which browser mode never sets: stop pull-to-refresh / rubber-banding
++         on the non-scrolling document. */
++      html,
++      body {
++        overscroll-behavior-y: none;
++      }
++
++      /* Tailwind's h-screen (100vh) overflows the visible area on mobile
++         browsers; the dynamic viewport matches what "screen" means here. */
++      html .h-screen {
++        height: 100dvh;
++      }
++      html .min-h-screen {
++        min-height: 100dvh;
++      }
++
++      @media (pointer: coarse) {
++        .codex-dialog {
++          max-height: min(
++            calc(100dvh - 16px),
++            calc(var(--codex-web-visual-viewport-height, 100dvh) - 16px)
++          );
++          overflow-y: auto;
++          overscroll-behavior: contain;
++        }
++
++        html[data-codex-web-keyboard="open"] .codex-dialog {
++          top: calc(
++            var(--codex-web-visual-viewport-offset-top, 0px) +
++              var(--codex-web-visual-viewport-height, 100dvh) / 2
++          );
++        }
 +      }
 +    </style>
      <script type="module" crossorigin src="./assets/index-C2RqhVyz.js"></script>
