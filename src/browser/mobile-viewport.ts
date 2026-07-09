@@ -56,21 +56,79 @@ export function shouldInstallGuard({
   return coarsePointer || narrowViewport || touchCapable;
 }
 
+function shortLabel(element: Element): string {
+  const className =
+    typeof element.className === "string"
+      ? element.className.trim().split(/\s+/).slice(0, 4).join(".")
+      : "";
+  const id = element.id ? `#${element.id}` : "";
+  return `${element.tagName.toLowerCase()}${id}${className ? `.${className}` : ""}`.slice(
+    0,
+    70,
+  );
+}
+
+// Lists the elements that overflow the visible viewport so a screenshot from
+// an affected device names the container that pushes the composer below the
+// fold — remote layout debugging without devtools access.
+function describeViewportOverflow(): string[] {
+  const viewportHeight = window.innerHeight;
+  const lines: string[] = [];
+  const root = document.getElementById("root");
+  if (root) {
+    const rect = root.getBoundingClientRect();
+    lines.push(`#root h=${Math.round(rect.height)} top=${Math.round(rect.top)}`);
+  }
+  const composer = document.querySelector(
+    '.ProseMirror, textarea, [contenteditable="true"]',
+  );
+  if (composer) {
+    const rect = composer.getBoundingClientRect();
+    lines.push(
+      `composer bottom=${Math.round(rect.bottom)} (viewport ${viewportHeight})`,
+    );
+  } else {
+    lines.push("composer: not found");
+  }
+  let listed = 0;
+  for (const element of document.body.querySelectorAll("*")) {
+    if (listed >= 5) {
+      lines.push("...more overflowing elements truncated");
+      break;
+    }
+    const rect = element.getBoundingClientRect();
+    if (rect.height > viewportHeight + 4) {
+      // Skip pure scroll containers: their content is meant to be taller.
+      const style = getComputedStyle(element);
+      const scrollable =
+        style.overflowY === "auto" || style.overflowY === "scroll";
+      lines.push(
+        `${scrollable ? "scroll" : "OVER"} ${shortLabel(element)} h=${Math.round(rect.height)}`,
+      );
+      listed += 1;
+    }
+  }
+  if (listed === 0) {
+    lines.push("no over-tall elements");
+  }
+  return lines;
+}
+
 function installViewportDebugBadge(visualViewport: VisualViewport): void {
   const badge = document.createElement("div");
   badge.style.cssText = [
     "position:fixed",
     "left:8px",
-    "bottom:8px",
+    "top:8px",
     "z-index:2147483647",
-    "background:rgba(0,0,0,0.75)",
+    "background:rgba(0,0,0,0.78)",
     "color:#0f0",
-    "font:11px/1.4 monospace",
+    "font:10px/1.4 monospace",
     "padding:6px 8px",
     "border-radius:6px",
     "pointer-events:none",
     "white-space:pre",
-    "max-width:92vw",
+    "max-width:94vw",
     "overflow:hidden",
   ].join(";");
   const update = (): void => {
@@ -79,11 +137,11 @@ function installViewportDebugBadge(visualViewport: VisualViewport): void {
     badge.textContent = [
       `inner ${window.innerWidth}x${window.innerHeight}`,
       `vv ${Math.round(visualViewport.width)}x${Math.round(visualViewport.height)} @${visualViewport.scale.toFixed(2)}`,
-      `vvOffset ${Math.round(visualViewport.offsetLeft)},${Math.round(visualViewport.offsetTop)}`,
-      `scroll ${Math.round(window.scrollX)},${Math.round(window.scrollY)}`,
+      `vvOffset ${Math.round(visualViewport.offsetLeft)},${Math.round(visualViewport.offsetTop)} scroll ${Math.round(window.scrollX)},${Math.round(window.scrollY)}`,
       `dvh:${dvhSupported ? "yes" : "NO"} kb:${document.documentElement.getAttribute(KEYBOARD_ATTRIBUTE) ?? "closed"}`,
-      `ua ${navigator.userAgent.slice(0, 80)}`,
-      `   ${navigator.userAgent.slice(80, 160)}`,
+      ...describeViewportOverflow(),
+      `ua ${navigator.userAgent.slice(0, 76)}`,
+      `   ${navigator.userAgent.slice(76, 152)}`,
     ].join("\n");
   };
   visualViewport.addEventListener("resize", update);

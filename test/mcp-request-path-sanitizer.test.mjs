@@ -66,6 +66,28 @@ test("drops entries that stay relative after expansion", () => {
   );
 });
 
+test("removes runtimeWorkspaceRoots entirely when every entry is garbage", () => {
+  // Observed in production: the webview leaked a workspace-root UUID where a
+  // path belongs. Degrade to "no override" instead of clearing the roots.
+  const envelope = mcpRequest("thread/resume", {
+    threadId: "t",
+    runtimeWorkspaceRoots: ["998a37a9-8db3-4060-9fcb-f9ecb9856a11"],
+  });
+  const result = sanitizeMcpRequestPaths(envelope, HOME);
+  assert.ok(result);
+  assert.equal("runtimeWorkspaceRoots" in envelope.request.params, false);
+});
+
+test("keeps writableRoots as an empty array when all entries drop", () => {
+  const envelope = mcpRequest("thread/resume", {
+    threadId: "t",
+    sandbox: { type: "workspaceWrite", writableRoots: ["not-a-path"] },
+  });
+  const result = sanitizeMcpRequestPaths(envelope, HOME);
+  assert.ok(result);
+  assert.deepEqual(envelope.request.params.sandbox.writableRoots, []);
+});
+
 test("expands a tilde cwd but leaves other cwd values alone", () => {
   const envelope = mcpRequest("thread/start", {
     cwd: "~",
@@ -89,7 +111,22 @@ test("leaves clean requests untouched and reports null", () => {
   assert.deepEqual(envelope.request.params, params);
 });
 
-test("ignores non-mcp-request envelopes", () => {
+test("sanitizes every request-carrying envelope type, e.g. prewarm", () => {
+  const envelope = {
+    type: "thread-prewarm-start",
+    hostId: "local",
+    request: {
+      id: "1",
+      method: "thread/start",
+      params: { runtimeWorkspaceRoots: ["~"] },
+    },
+  };
+  const result = sanitizeMcpRequestPaths(envelope, HOME);
+  assert.ok(result);
+  assert.deepEqual(envelope.request.params.runtimeWorkspaceRoots, [HOME]);
+});
+
+test("ignores non-request envelopes", () => {
   assert.equal(sanitizeMcpRequestPaths("string arg", HOME), null);
   assert.equal(sanitizeMcpRequestPaths(null, HOME), null);
   assert.equal(

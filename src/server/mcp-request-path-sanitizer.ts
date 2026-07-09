@@ -72,6 +72,22 @@ function sanitizeNode(
         }
         sanitized.push(result.value);
       }
+      // A garbage override should degrade to "no override", not to an
+      // override that actively clears the thread's roots. writableRoots is a
+      // struct field and must stay present (possibly empty) instead.
+      if (
+        key === "runtimeWorkspaceRoots" &&
+        sanitized.length === 0 &&
+        value.length > 0
+      ) {
+        delete record[key];
+        changes.push({
+          key,
+          before: "(all entries dropped)",
+          after: "(override removed)",
+        });
+        continue;
+      }
       record[key] = sanitized;
       continue;
     }
@@ -98,9 +114,13 @@ type McpRequestEnvelope = {
 };
 
 /**
- * Rewrites, in place, non-absolute paths inside an outbound `mcp-request`
- * bridge envelope. Returns the changes made (empty when the envelope was
- * either not an mcp-request or already clean) so callers can log them.
+ * Rewrites, in place, non-absolute paths inside an outbound bridge envelope
+ * that carries a JSON-RPC request. Matched by shape rather than by envelope
+ * type: the shell accepts several request-carrying types (`mcp-request`,
+ * `thread-prewarm-start`, `mcp-notification`, ...) and a prewarm thread/start
+ * fails on dirty paths just like a regular request does. Returns the changes
+ * made (null when the argument is not a request envelope or already clean)
+ * so callers can log them.
  */
 export function sanitizeMcpRequestPaths(
   argument: unknown,
@@ -110,7 +130,7 @@ export function sanitizeMcpRequestPaths(
     return null;
   }
   const envelope = argument as McpRequestEnvelope;
-  if (envelope.type !== "mcp-request") {
+  if (typeof envelope.type !== "string") {
     return null;
   }
   const request = envelope.request;
