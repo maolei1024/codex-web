@@ -195,8 +195,8 @@ let reconnectRecoveryTimeoutId: number | null = null;
 let cachedAppServerInitializedMessage: Record<string, unknown> = {
   type: "codex-app-server-initialized",
   hostId: "local",
-  appServerVersion: "0.142.5",
-  installedCodexVersion: "0.142.5",
+  appServerVersion: "0.143.0",
+  installedCodexVersion: "0.143.0",
 };
 
 function scheduleReconnectRecovery(): void {
