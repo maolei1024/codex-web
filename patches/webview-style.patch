@@ -1,6 +1,6 @@
 --- a/webview/index.html
 +++ b/webview/index.html
-@@ -118,6 +118,63 @@
+@@ -118,6 +118,66 @@
          }
        }
      </style>
@@ -10,19 +10,22 @@
 +      }
 +
 +      /*
-+        codex-web mobile fixes. The app stylesheet sizes #root with 100vh,
-+        which overflows mobile browsers whenever the URL bar is visible and
-+        leaves the composer's bottom action bar below the screen. Prefer the
-+        dynamic viewport height, and while the software keyboard is open
-+        (attribute + variables set by the preload shim, see
-+        src/browser/mobile-viewport.ts) pin the app to the visible height so
-+        in-flow bottom UI stays above the keyboard.
++        codex-web mobile fixes. The app stylesheet sizes #root and body with
++        100vh, which overflows mobile browsers whenever the URL bar is
++        visible and leaves the composer's bottom action bar below the
++        screen. Track the visible height instead: the visualViewport
++        variable (kept current by the preload shim, see
++        src/browser/mobile-viewport.ts) reaches far older engines than dvh,
++        dvh covers non-touch layouts, and 100% is the last resort — which is
++        why body must be pinned back to 100%, or the 100% fallback resolves
++        against body's own 100vh.
 +      */
++      html body {
++        height: 100%;
++      }
 +      html #root {
 +        height: 100%;
 +        height: 100dvh;
-+      }
-+      html[data-codex-web-keyboard="open"] #root {
 +        height: var(--codex-web-visual-viewport-height, 100dvh);
 +      }
 +
@@ -43,7 +46,7 @@
 +        min-height: 100dvh;
 +      }
 +
-+      @media (pointer: coarse) {
++      @media (pointer: coarse), (max-width: 768px) {
 +        .codex-dialog {
 +          max-height: min(
 +            calc(100dvh - 16px),
