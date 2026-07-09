@@ -1,6 +1,6 @@
 --- a/webview/index.html
 +++ b/webview/index.html
-@@ -118,6 +118,66 @@
+@@ -118,6 +118,77 @@
          }
        }
      </style>
@@ -27,6 +27,17 @@
 +        height: 100%;
 +        height: 100dvh;
 +        height: var(--codex-web-visual-viewport-height, 100dvh);
++      }
++
++      /* The app shell wrapper carries an inline
++         height: calc(100vh / var(--codex-window-zoom)) — correct in a
++         fixed-size Electron window, but several Android browsers resolve
++         100vh against the large viewport (ignoring their own extra
++         toolbars), which pushes the composer's action bar below the screen
++         even when #root is pinned correctly. Re-base it on #root, keeping
++         the window-zoom division. */
++      html #root > div[style*="100vh"] {
++        height: calc(100% / var(--codex-window-zoom, 1)) !important;
 +      }
 +
 +      /* Upstream only disables this under [data-codex-window-type=electron],
