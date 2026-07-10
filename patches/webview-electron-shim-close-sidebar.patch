@@ -6,17 +6,17 @@
      : (a = n[5]),
 -    wt(`toggle-sidebar`, i, a));
 +    wt(`toggle-sidebar`, i, a),
-+    Wr.useEffect(() => {
++    codexWebShimReact.useEffect(() => {
 +      window.__ELECTRON_SHIM__.closeSidebar = () => {
 +        kl(e, !1);
 +      };
 +    }, [e]));
  }
  var che,
-+  Wr,
++  codexWebShimReact,
    lhe = e(() => {
 -    ((che = J()), Ki(), gi(), Pa());
-+    ((che = J()), (Wr = t(xc(), 1)), Ki(), gi(), Pa());
++    ((che = J()), (codexWebShimReact = t(xc(), 1)), Ki(), gi(), Pa());
    });
  function uhe(e) {
    let t = ghe.exec(e);
