@@ -541,6 +541,40 @@ electronShim.overrideAdapter = {
 
     return null;
   },
+  getDynamicConfigOverride(e) {
+    // 107580212 is the model-picker config: its available_models list is the
+    // picker's whitelist (also forwarded as the model/list filter). Statsig is
+    // unreachable from this deployment, so the webview only ever sees the
+    // defaults baked into the bundle at upstream build time — which predate
+    // GPT-5.6. Merge the 5.6 tiers in; app-server's model/list already
+    // returns them, this config only gates visibility. Leave an empty list
+    // untouched: empty means "no whitelist yet" and overriding it would turn
+    // a no-filter state into a 3-model whitelist.
+    if (e.name === "107580212") {
+      const value =
+        e.value && typeof e.value === "object"
+          ? (e.value as Record<string, unknown>)
+          : {};
+      const existing = Array.isArray(value.available_models)
+        ? (value.available_models as string[])
+        : [];
+      if (existing.length === 0) {
+        return null;
+      }
+      const additions = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].filter(
+        (model) => !existing.includes(model),
+      );
+      if (additions.length === 0) {
+        return null;
+      }
+      return {
+        ...e,
+        value: { ...value, available_models: [...existing, ...additions] },
+      };
+    }
+
+    return null;
+  },
 };
 
 const initialRoute = mapBrowserPathToInitialRoute(
