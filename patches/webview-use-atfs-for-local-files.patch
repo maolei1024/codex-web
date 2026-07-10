@@ -1,11 +1,11 @@
---- a/webview/assets/app-initial~app-main~worktree-init-v2-page~remote-conversation-page~onboarding-page~hotkey-~ke3yc5wu-BLQiF1Gs.js
-+++ b/webview/assets/app-initial~app-main~worktree-init-v2-page~remote-conversation-page~onboarding-page~hotkey-~ke3yc5wu-BLQiF1Gs.js
-@@ -142820,7 +142825,7 @@
+--- a/webview/assets/app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js
++++ b/webview/assets/app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js
+@@ -253935,7 +253935,7 @@
          })));
    });
- function o7t(e) {
--  return `${l7t}${c7t(e)}`;
-+  return c7t(e);
+ function qbr(e) {
+-  return `${Xbr}${Ybr(e)}`;
++  return Ybr(e);
  }
- function s7t(e) {
-   return c7t(e);
+ function Jbr(e) {
+   return Ybr(e);

@@ -1,117 +1,119 @@
---- a/webview/assets/app-initial~app-main~automations-page-Bl6HoLGr.js
-+++ b/webview/assets/app-initial~app-main~automations-page-Bl6HoLGr.js
-@@ -411,6 +411,7 @@
-   HG as un,
-   HL as dn,
-   HM as fn,
-+  HO as useSearchParams,
-   HP as pn,
-   HS as mn,
-   HU as hn,
-@@ -18691,6 +18692,8 @@
-     p = oh(),
-     m = bu(),
-     h = Tr(),
+--- a/webview/assets/app-initial~app-main~page-CtX5-cLy.js
++++ b/webview/assets/app-initial~app-main~page-CtX5-cLy.js
+@@ -510,6 +510,7 @@
+   HG as _n,
+   HH as eee,
+   HM as vn,
++  HR as useSearchParams,
+   HS as yn,
+   Het as bn,
+   Hg as xn,
+@@ -29098,6 +29099,8 @@
+     g = Ma(),
+     _ = jr(),
+     v = _.state,
 +    [searchParams] = useSearchParams(),
 +    searchParamsPrompt = searchParams.get(`prompt`),
-     g = h.state;
-   K(qd);
-   let { data: _ } = Mu(`account-info`, {
-@@ -19004,6 +19007,8 @@
-                                       ? () => (0, $V.jsx)(jB, {})
-                                       : void 0,
-                                     onLocalConversationCreated: ae,
-+                                    defaultText: searchParamsPrompt ?? void 0,
-+                                    initialPrompt: searchParamsPrompt ?? void 0,
-                                     externalFooterVariant: `home`,
-                                     homeRunLocationRemoteProject: R,
-                                     hideRunLocationDropdownOverride: !ee,
-@@ -19040,6 +19045,8 @@
-                       children: (0, $V.jsx)(AS, {
-                         browserConversationId: ie,
-                         composerLayoutMode: `auto-single-line`,
-+                        defaultText: searchParamsPrompt ?? void 0,
-+                        initialPrompt: searchParamsPrompt ?? void 0,
-                         homeRunLocationRemoteProject: R,
-                         onLocalConversationCreated: ae,
-                         showWorkspaceDropdownInFooter: !1,
---- a/webview/assets/app-initial~app-main~remote-conversation-page~new-thread-panel-page~appgen-library-page~hot~djo67r4n-BdcfLXho.js
-+++ b/webview/assets/app-initial~app-main~remote-conversation-page~new-thread-panel-page~appgen-library-page~hot~djo67r4n-BdcfLXho.js
-@@ -35169,6 +35169,7 @@
+     { data: y } = Ia(`account-info`, {
+       queryConfig: { enabled: c === `chatgpt` },
+     }),
+@@ -29471,6 +29474,10 @@
+                                             hideRunLocationDropdownOverride:
+                                               !te,
+                                             onLocalConversationCreated: oe,
++                                            defaultText:
++                                              searchParamsPrompt ?? void 0,
++                                            initialPrompt:
++                                              searchParamsPrompt ?? void 0,
+                                             placeholderText: Me,
+                                           }),
+                                         ],
+@@ -29494,6 +29501,8 @@
+                           (0, lY.jsx)(uC, {
+                             browserConversationId: ae,
+                             composerLayoutMode: `auto-single-line`,
++                            defaultText: searchParamsPrompt ?? void 0,
++                            initialPrompt: searchParamsPrompt ?? void 0,
+                             homeRunLocationRemoteProject: ee,
+                             onLocalConversationCreated: oe,
+                             showWorkspaceDropdownInUtilityBar: !1,
+--- a/webview/assets/app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-Cdmi2Vi6.js
++++ b/webview/assets/app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-Cdmi2Vi6.js
+@@ -45773,6 +45773,7 @@
  }
- var CG = e(() => {});
- function wG({
+ var Z1 = e(() => {});
+ function Q1({
 +  initialPrompt,
    aboveComposerHeaderContent: e,
-   belowComposerContent: t,
-   activeCollaborationMode: n,
-@@ -35714,13 +35715,20 @@
-     Xa = (0, DG.useEffectEvent)(() => {
-       (wn && Ga(wn),
-         qa != null && Ua(qa),
--        Sn && Sn !== Un.getText() && Un.setPromptText(Sn),
-+        Sn && Sn !== Un.getText()
-+          ? Un.setPromptText(Sn)
-+          : !Sn &&
+   activeCollaborationMode: t,
+   browserConversationId: n,
+@@ -46315,13 +46316,20 @@
+     Ua = (0, t0.useEffectEvent)(() => {
+       (bn && Ba(bn),
+         Va != null && Ra(Va),
+-        _n && _n !== In.getText() && In.setPromptText(_n),
++        _n && _n !== In.getText()
++          ? In.setPromptText(_n)
++          : !_n &&
 +              initialPrompt != null &&
 +              initialPrompt !== `` &&
-+              Un.getText() === ``
-+            ? Un.setPromptText(initialPrompt)
++              In.getText() === ``
++            ? In.setPromptText(initialPrompt)
 +            : null,
-         Tn != null && Tn.length > 0 && Pa(Tn),
-         En != null && En.length > 0 && Vi(En));
+         xn != null && xn.length > 0 && ka(xn),
+         Sn != null && Sn.length > 0 && Ni(Sn));
      });
-   (0, DG.useEffect)(() => {
-     Xa();
--  }, [Sn, wn, Tn, En, qa]);
-+  }, [Sn, wn, Tn, En, qa, initialPrompt]);
-   let [Za, $a] = ei(`composer_prefill`),
-     eo = (0, DG.useEffectEvent)(() => {
-       let e = Za?.commentAttachments,
-@@ -38238,7 +38246,7 @@
-     ((GG = q()), dn(), (KG = t(J(), 1)), ep(), zt(), Jl(), (qG = X()));
+   (0, t0.useEffect)(() => {
+     Ua();
+-  }, [_n, bn, xn, Sn, Va]);
++  }, [_n, bn, xn, Sn, Va, initialPrompt]);
+   let [Wa, Ga] = ef(`composer_prefill`),
+     qa = (0, t0.useEffectEvent)(() => {
+       let e = Wa?.commentAttachments,
+@@ -48823,7 +48831,7 @@
+     ((g0 = X()), za(), (_0 = t(Ya(), 1)), Cs(), wr(), Yo(), (v0 = Z()));
    });
- function YG(e) {
--  let t = (0, QG.c)(104),
-+  let t = (0, QG.c)(105),
+ function b0(e) {
+-  let t = (0, C0.c)(107),
++  let t = (0, C0.c)(108),
      {
        browserConversationId: n,
        className: r,
-@@ -38260,6 +38268,8 @@
-       hideRunLocationDropdownOverride: b,
-       composerModeAvailability: x,
-       placeholderText: S,
+@@ -48843,6 +48851,8 @@
+       hideRunLocationDropdownOverride: v,
+       composerModeAvailability: y,
+       placeholderText: b,
 +      defaultText,
 +      initialPrompt,
-       composerLayoutMode: C,
-       hotkeyWindowHomeFooterControls: w,
+       composerLayoutMode: x,
+       hotkeyWindowHomeFooterControls: S,
        homeRunLocationRemoteProject: T,
-@@ -38301,7 +38311,7 @@
-     ? (oe = t[4])
-     : ((oe = g(R.value)), (t[3] = R.value), (t[4] = oe));
-   let se = oe,
--    ce = R.get(Tr),
-+    ce = defaultText ?? R.get(Tr),
-     le;
-   t[5] === R ? (le = t[6]) : ((le = gi(R)), (t[5] = R), (t[6] = le));
-   let U = le,
-@@ -38552,8 +38562,10 @@
-   t[87] !== M ||
-   t[88] !== d ||
-   t[89] !== qe ||
--  t[90] !== Je
-+  t[90] !== Je ||
-+  t[104] !== initialPrompt
-     ? ((Ye = (0, eK.jsx)(wG, {
+@@ -48890,7 +48900,7 @@
+     ? (re = t[5])
+     : ((re = Gt(U.value)), (t[4] = U.value), (t[5] = re));
+   let ie = re,
+-    J = U.get(C),
++    J = defaultText ?? U.get(C),
+     ae;
+   t[6] === U ? (ae = t[7]) : ((ae = Pd(U)), (t[6] = U), (t[7] = ae));
+   let oe = ae,
+@@ -49146,8 +49156,10 @@
+   t[90] !== Ke ||
+   t[91] !== qe ||
+   t[92] !== L ||
+-  t[93] !== null
++  t[93] !== null ||
++  t[107] !== initialPrompt
+     ? ((Je = (0, T0.jsx)(Q1, {
 +        initialPrompt,
-         aboveComposerHeaderContent: qe,
-         belowComposerContent: o,
-         activeCollaborationMode: he,
-@@ -38615,6 +38627,7 @@
-       (t[88] = d),
-       (t[89] = qe),
-       (t[90] = Je),
-+      (t[104] = initialPrompt),
-       (t[91] = Ye))
-     : (Ye = t[91]);
+         aboveComposerHeaderContent: Ke,
+         clientThreadId: te,
+         activeCollaborationMode: pe,
+@@ -49211,6 +49223,7 @@
+       (t[91] = qe),
+       (t[92] = L),
+       (t[93] = null),
++      (t[107] = initialPrompt),
+       (t[94] = Je))
+     : (Je = t[94]);
    let Xe;

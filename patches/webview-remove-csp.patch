@@ -1,8 +1,8 @@
 --- a/webview/index.html
 +++ b/webview/index.html
-@@ -139,10 +139,6 @@
+@@ -152,10 +152,6 @@
        crossorigin
-       href="./assets/app-initial~app-main~worktree-init-v2-page~remote-conversation-page~onboarding-page~hotkey-~ke3yc5wu-CEKeKP9i.css"
+       href="./assets/app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-WPYLRJwA.css"
      />
 -    <meta
 -      http-equiv="Content-Security-Policy"

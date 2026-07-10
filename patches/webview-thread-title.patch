@@ -1,29 +1,29 @@
---- a/webview/assets/local-conversation-thread-CRryh-25.js
-+++ b/webview/assets/local-conversation-thread-CRryh-25.js
-@@ -155,6 +155,7 @@
-   QY as Dt,
-   Qb as Ot,
-   Qg as kt,
-+  Qw as codexHostedWindowTitleAtom,
-   RR as At,
-   RV as jt,
-   Rq as Mt,
-@@ -17068,6 +17069,7 @@
-     S = K(er, e),
-     T = K(Kt, e),
-     E = K(Bn, e) === `projectless`,
-+    codexHostedWindowTitle = K(codexHostedWindowTitleAtom, e),
-     D = K(C, e),
-     O = K(In, e),
+--- a/webview/assets/local-conversation-thread-imfIBhy0.js
++++ b/webview/assets/local-conversation-thread-imfIBhy0.js
+@@ -233,6 +233,7 @@
+   X5 as Nn,
+   X6 as Pn,
+   XM as Fn,
++  XN as codexHostedWindowTitleAtom,
+   XP as In,
+   XS as Ln,
+   XY as Rn,
+@@ -16012,6 +16013,7 @@
+     w = W(zr, e),
+     T = W(Ti, e),
+     E = W(Ki, e) === `projectless`,
++    codexHostedWindowTitle = W(codexHostedWindowTitleAtom, e),
+     D = W(oo, e),
+     O = W(Fi, e),
      {
-@@ -17093,6 +17095,10 @@
-   (0, GS.useEffect)(() => {
-     U?.id == null || U.readAt != null || ne(U.id);
-   }, [U?.id, U?.readAt, ne]);
-+  (0, GS.useEffect)(() => {
+@@ -16045,6 +16047,10 @@
+   (0, sC.useEffect)(() => {
+     re?.id == null || re.readAt != null || ne(re.id);
+   }, [re?.id, re?.readAt, ne]);
++  (0, sC.useEffect)(() => {
 +    let t = codexHostedWindowTitle?.trim();
 +    t && (document.title = `${t} | Codex`);
 +  }, [codexHostedWindowTitle]);
-   let ae = $e(),
-     { agentMode: oe, shouldSendPermissionOverrides: se } = xt({
+   let oe = Xt(),
+     { agentMode: se, shouldSendPermissionOverrides: ce } = dc({
        conversationId: e,

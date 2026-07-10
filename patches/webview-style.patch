@@ -1,6 +1,6 @@
 --- a/webview/index.html
 +++ b/webview/index.html
-@@ -118,6 +118,77 @@
+@@ -131,6 +131,77 @@
          }
        }
      </style>
@@ -75,6 +75,6 @@
 +        }
 +      }
 +    </style>
-     <script type="module" crossorigin src="./assets/index-C2RqhVyz.js"></script>
+     <script type="module" crossorigin src="./assets/index-CSKm7Mu1.js"></script>
      <link
        rel="modulepreload"

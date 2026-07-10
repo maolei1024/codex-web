@@ -1,10 +1,10 @@
---- a/webview/assets/app-initial~app-main~worktree-init-v2-page~appgen-settings-page~page~appgen-page~remote-con~lblzrcac-CGLvIrB3.js
-+++ b/webview/assets/app-initial~app-main~worktree-init-v2-page~appgen-settings-page~page~appgen-page~remote-con~lblzrcac-CGLvIrB3.js
-@@ -13897,6 +13897,7 @@
-     n = R(e.appVersion),
+--- a/webview/assets/app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js
++++ b/webview/assets/app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js
+@@ -218974,6 +218974,7 @@
+     n = vhe(e.appVersion),
      r = e.buildFlavor !== `prod`;
-   (Lw({
+   (v5n({
 +    enabled: !1,
-     beforeSend: ot,
-     dsn: On,
-     environment: Gw,
+     beforeSend: zkt,
+     dsn: bCe,
+     environment: E5n,

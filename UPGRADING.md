@@ -40,8 +40,12 @@ sure to wait for its completion before doing validation. run it in a subagent.
 run the following to get the version of the new codex-cli
 
 ```bash
-scratch/Codex.app/Contents/Resources/codex --version
+scratch/ChatGPT.app/Contents/Resources/codex --version
 ```
+
+(the upstream app bundle was renamed from `Codex.app` to `ChatGPT.app` as of
+26.707; the zip filename prefix changed from `Codex-darwin-arm64-` to
+`ChatGPT-darwin-arm64-` at the same time)
 
 then update the `nix/codex/default.nix` file's `version` field and hashes to
 point to the new version.

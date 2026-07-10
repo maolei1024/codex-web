@@ -1,9 +1,9 @@
---- a/webview/assets/app-initial~app-main~worktree-init-v2-page~remote-conversation-page~onboarding-page~hotkey-~ke3yc5wu-BLQiF1Gs.js
-+++ b/webview/assets/app-initial~app-main~worktree-init-v2-page~remote-conversation-page~onboarding-page~hotkey-~ke3yc5wu-BLQiF1Gs.js
-@@ -176884,8 +176889,18 @@
-     d = new EventTarget(),
-     f = new Epn(),
-     p = o,
+--- a/webview/assets/app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js
++++ b/webview/assets/app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js
+@@ -328479,8 +328479,18 @@
+     f = new EventTarget(),
+     p = new Vmi(),
+     m = s,
 +    inputModeDisabled = !1,
 +    getAttributes = () =>
 +      inputModeDisabled
@@ -12,18 +12,19 @@
 +    setPointerInputMode = (e) => {
 +      inputModeDisabled !== e &&
 +        ((inputModeDisabled = e),
-+        m.isDestroyed || m.setProps({ attributes: getAttributes }));
++        h.isDestroyed || h.setProps({ attributes: getAttributes }));
 +    },
-     m = new nfn(null, {
+     h = new MAr(null, {
 -      attributes: { spellcheck: `true` },
 +      attributes: getAttributes,
-       state: Von.create({
-         schema: a7,
+       state: ZEr.create({
+         schema: k9,
          doc:
-@@ -176962,6 +176977,17 @@
-         let t = m.state.apply(e);
-         (m.updateState(t), d.dispatchEvent(new Event(g8)));
-       },
+@@ -328610,6 +328620,17 @@
+         let t = h.state.apply(e);
+         (h.updateState(t),
+           f.dispatchEvent(new CustomEvent(cfi, { detail: e.docChanged })));
++      },
 +      handleDOMEvents: {
 +        mousedown(e, t) {
 +          return (setPointerInputMode(!0), !1);
@@ -34,7 +35,6 @@
 +        blur(e, t) {
 +          return (setPointerInputMode(!1), !1);
 +        },
-+      },
+       },
        handlePaste(e, t) {
          if (t.defaultPrevented) return !0;
-         let n = t.clipboardData,

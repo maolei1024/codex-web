@@ -1,10 +1,10 @@
---- a/webview/assets/app-initial~app-main~automations-page-Bl6HoLGr.js
-+++ b/webview/assets/app-initial~app-main~automations-page-Bl6HoLGr.js
-@@ -26213,6 +26220,7 @@
-       (TJ = 5),
-       (EJ = 500),
-       (DJ = {
+--- a/webview/assets/app-initial~app-main~page-CtX5-cLy.js
++++ b/webview/assets/app-initial~app-main~page-CtX5-cLy.js
+@@ -38143,6 +38143,7 @@
+       (h0 = 5),
+       (g0 = 500),
+       (_0 = {
 +        overrideAdapter: window.__ELECTRON_SHIM__.overrideAdapter,
          networkConfig: {
-           api: SJ,
-           logEventUrl: xK,
+           api: f0,
+           logEventUrl: e1,
