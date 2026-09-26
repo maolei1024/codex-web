@@ -816,6 +816,11 @@ const crashReporter = {
 };
 
 const net = {
+  // Node has no Electron network monitor. Let the transport attempt the
+  // connection and report real DNS/SSH errors instead of blocking reconnects.
+  isOnline(): boolean {
+    return true;
+  },
   async fetch(input: string | URL, init?: RequestInit): Promise<Response> {
     // log("net.fetch", [input, init]);
     if (typeof globalThis.fetch === "function") {

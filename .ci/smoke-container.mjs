@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,6 +8,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { initializeContainer } from "/app/scripts/container-init.mjs";
 
 const require = createRequire("/app/package.json");
+assert.equal(require("/app/src/server/electron/index.js").net.isOnline(), true);
+// OpenSSH resolves ~/.ssh from passwd, independently of the HOME environment.
+assert.equal(execFileSync("getent", ["passwd", String(process.getuid())], { encoding: "utf8" }).trim().split(":")[5], process.env.HOME);
 const Database = require("better-sqlite3");
 const db = new Database(":memory:");
 assert.equal(db.prepare("select 1 as n").get().n, 1);
@@ -42,6 +45,30 @@ try {
   assert.equal((await fetch(url, { headers })).status, 200);
   const socket = new WebSocket("ws://127.0.0.1:18214/__backend/ipc", { headers });
   await Promise.race([once(socket, "open"), delay(10_000).then(() => { throw new Error("WebSocket timeout"); })]);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Desktop app-server initialization timeout")), 60_000);
+    const sendRequest = () => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "ipc-renderer-invoke", requestId: "smoke-invoke", channel: "codex_desktop:message-from-view", args: [{ type: "mcp-request", hostId: "local", request: { id: "smoke-thread-list", method: "thread/list", params: { limit: 1 } } }] }));
+    };
+    socket.on("message", (raw) => {
+      const envelope = JSON.parse(raw);
+      if (envelope.type === "ipc-renderer-invoke-result" && envelope.requestId === "smoke-invoke" && !envelope.ok) {
+        if (envelope.errorMessage.includes("No ipcMain.handle")) setTimeout(sendRequest, 100);
+        else { clearTimeout(timer); reject(new Error(envelope.errorMessage)); }
+        return;
+      }
+      const message = envelope.type === "ipc-main-event" && envelope.args?.[0];
+      if (message?.type === "mcp-response" && message.message.id === "smoke-thread-list") {
+        clearTimeout(timer);
+        if (message.message.error) reject(new Error(JSON.stringify(message.message.error)));
+        else {
+          try { assert.ok(Array.isArray(message.message.result.data)); resolve(); }
+          catch (error) { reject(error); }
+        }
+      }
+    });
+    sendRequest();
+  });
   socket.close();
   await delay(2000);
   assert.equal(child.exitCode, null, "Desktop bridge must remain running");

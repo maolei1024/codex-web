@@ -30,7 +30,7 @@ ENV NODE_ENV=production \
     CODEX_ELECTRON_USER_DATA_PATH=/data/app/userData \
     CODEX_WEB_DOCUMENTS_DIR=/data/documents \
     CODEX_WEB_UPLOAD_ROOT=/data/uploads
-RUN mkdir /data && chown node:node /data
+RUN mkdir /data && chown node:node /data && usermod -d /data/home node
 USER node
 # Exercise the actual packaged application and target-native addons before push.
 RUN --mount=type=bind,source=.ci/smoke-container.mjs,target=/app/smoke-container.mjs \
