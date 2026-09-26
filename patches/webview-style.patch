@@ -1,12 +1,78 @@
 --- a/webview/index.html
 +++ b/webview/index.html
-@@ -132,6 +132,11 @@
+@@ -132,6 +132,77 @@
          }
        }
      </style>
 +    <style>
 +      .main-surface {
 +        --spacing-token-safe-header-left: 0px;
++      }
++
++      /*
++        codex-web mobile fixes. The app stylesheet sizes #root and body with
++        100vh, which overflows mobile browsers whenever the URL bar is
++        visible and leaves the composer's bottom action bar below the
++        screen. Track the visible height instead: the visualViewport
++        variable (kept current by the preload shim, see
++        src/browser/mobile-viewport.ts) reaches far older engines than dvh,
++        dvh covers non-touch layouts, and 100% is the last resort — which is
++        why body must be pinned back to 100%, or the 100% fallback resolves
++        against body's own 100vh.
++      */
++      html body {
++        height: 100%;
++      }
++      html #root {
++        height: 100%;
++        height: 100dvh;
++        height: var(--codex-web-visual-viewport-height, 100dvh);
++      }
++
++      /* The app shell wrapper carries an inline
++         height: calc(100vh / var(--codex-window-zoom)) — correct in a
++         fixed-size Electron window, but several Android browsers resolve
++         100vh against the large viewport (ignoring their own extra
++         toolbars), which pushes the composer's action bar below the screen
++         even when #root is pinned correctly. Re-base it on #root, keeping
++         the window-zoom division. */
++      html #root > div[style*="100vh"] {
++        height: calc(100% / var(--codex-window-zoom, 1)) !important;
++      }
++
++      /* Upstream only disables this under [data-codex-window-type=electron],
++         which browser mode never sets: stop pull-to-refresh / rubber-banding
++         on the non-scrolling document. */
++      html,
++      body {
++        overscroll-behavior-y: none;
++      }
++
++      /* Tailwind's h-screen (100vh) overflows the visible area on mobile
++         browsers; the dynamic viewport matches what "screen" means here. */
++      html .h-screen {
++        height: 100dvh;
++      }
++      html .min-h-screen {
++        min-height: 100dvh;
++      }
++
++      @media (pointer: coarse), (max-width: 768px) {
++        .codex-dialog {
++          max-height: min(
++            calc(100dvh - 16px),
++            calc(var(--codex-web-visual-viewport-height, 100dvh) - 16px)
++          );
++          overflow-y: auto;
++          overscroll-behavior: contain;
++        }
++
++        html[data-codex-web-keyboard="open"] .codex-dialog {
++          top: calc(
++            var(--codex-web-visual-viewport-offset-top, 0px) +
++              var(--codex-web-visual-viewport-height, 100dvh) / 2
++          );
++        }
 +      }
 +    </style>
      <script
