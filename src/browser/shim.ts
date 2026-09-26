@@ -4,8 +4,17 @@ import {
 } from "./routes";
 import {
   handleLocalFilePickerMessage,
+  installBrowserFileUploadBridge,
   isLocalFilePickerMessage,
 } from "./files";
+import { getUploadedFilePath } from "./uploaded-file-paths";
+import { installMobileViewportGuard } from "./mobile-viewport";
+import { reconnectDelayMs } from "./reconnect";
+import {
+  clearStatsigSnapshots,
+  configureStatsigClient,
+  type StatsigClientLike,
+} from "./statsig-cache";
 import {
   openSelectWorkspaceRootDialog,
   type WorkspaceDirectoryEntries,
@@ -87,8 +96,6 @@ type MainToRendererMessage =
       portId: string;
     };
 
-const RECONNECT_DELAY_MS = 1_000;
-
 type MemoryNavigationChange = {
   action: "POP" | "PUSH" | "REPLACE";
   delta: number;
@@ -107,7 +114,17 @@ type StatsigGateEvaluation = {
   [key: string]: unknown;
 };
 
+type StatsigDynamicConfigEvaluation = {
+  name: string;
+  value: unknown;
+  [key: string]: unknown;
+};
+
 type ElectronShimState = {
+  configureStatsigClient?: <T extends StatsigClientLike>(
+    client: T,
+    sdkKey: string,
+  ) => T;
   initialRoute?: string;
   initialSidebarState?: boolean;
   closeSidebar?: () => void;
@@ -117,6 +134,10 @@ type ElectronShimState = {
       evaluation: StatsigGateEvaluation,
       ...args: unknown[]
     ) => StatsigGateEvaluation | null;
+    getDynamicConfigOverride?: (
+      evaluation: StatsigDynamicConfigEvaluation,
+      ...args: unknown[]
+    ) => StatsigDynamicConfigEvaluation | null;
   };
 };
 
@@ -127,10 +148,14 @@ declare global {
 }
 
 declare const __CODEX_APP_VERSION__: string;
+declare const __CODEX_WEB_BUILD_ID__: string;
 
 let requestCounter = 0;
 let socket: WebSocket | null = null;
 let reconnectTimeoutId: number | null = null;
+let reconnectAttempt = 0;
+let consecutiveConnectFailures = 0;
+let authProbeInFlight = false;
 const outboundQueue: RendererToMainMessage[] = [];
 const pendingInvokes = new Map<
   string,
@@ -148,6 +173,38 @@ const pendingDirectoryEntries = new Map<
 >();
 const rendererListeners = new Map<string, Set<IpcListener>>();
 const messagePorts = new Map<string, MessagePort>();
+const MESSAGE_FOR_VIEW_CHANNEL = "codex_desktop:message-for-view";
+const AUTH_PROBE_FAILURE_INTERVAL = 5;
+const DISCONNECT_ERROR_MESSAGE =
+  "[electron-stub] IPC bridge disconnected before the response arrived; the connection is being retried";
+let hasConnectedBefore = false;
+let appServerInitializationRevision = 0;
+let reconnectRecoveryTimeoutId: number | null = null;
+let cachedAppServerInitializedMessage: Record<string, unknown> | null = null;
+
+function scheduleReconnectRecovery(): void {
+  if (reconnectRecoveryTimeoutId !== null) {
+    window.clearTimeout(reconnectRecoveryTimeoutId);
+  }
+  const expectedRevision = appServerInitializationRevision;
+  reconnectRecoveryTimeoutId = window.setTimeout(() => {
+    reconnectRecoveryTimeoutId = null;
+    if (
+      !socket ||
+      socket.readyState !== WebSocket.OPEN ||
+      appServerInitializationRevision !== expectedRevision ||
+      cachedAppServerInitializedMessage === null
+    ) {
+      return;
+    }
+    console.info(
+      "[electron-stub] IPC bridge reconnected; triggering app-server recovery",
+    );
+    emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [
+      cachedAppServerInitializedMessage,
+    ]);
+  }, 2_000);
+}
 
 function unimplemented(method: string): never {
   debugger;
@@ -167,6 +224,17 @@ export function emitRendererEvent(channel: string, args: unknown[]): void {
 
 function handleIncomingMessage(message: MainToRendererMessage): void {
   if (message.type === "ipc-main-event") {
+    if (message.channel === MESSAGE_FOR_VIEW_CHANNEL) {
+      const payload = message.args[0];
+      if (
+        isRecord(payload) &&
+        payload.type === "codex-app-server-initialized" &&
+        payload.hostId === "local"
+      ) {
+        cachedAppServerInitializedMessage = payload;
+        appServerInitializationRevision += 1;
+      }
+    }
     emitRendererEvent(message.channel, message.args);
     return;
   }
@@ -220,14 +288,84 @@ function flushOutboundQueue(): void {
   }
 }
 
+function failPendingRequests(reason: Error): void {
+  const retained = outboundQueue.filter(
+    (message) => message.type === "ipc-renderer-send",
+  );
+  outboundQueue.length = 0;
+  outboundQueue.push(...retained);
+
+  for (const pending of pendingInvokes.values()) {
+    pending.reject(reason);
+  }
+  pendingInvokes.clear();
+  for (const pending of pendingDirectoryEntries.values()) {
+    pending.reject(reason);
+  }
+  pendingDirectoryEntries.clear();
+}
+
+function closeMessagePorts(): void {
+  for (const port of messagePorts.values()) {
+    port.close();
+  }
+  messagePorts.clear();
+}
+
 function scheduleReconnect(): void {
   if (reconnectTimeoutId !== null) {
     return;
   }
+  const delay = reconnectDelayMs(reconnectAttempt);
+  reconnectAttempt += 1;
   reconnectTimeoutId = window.setTimeout(() => {
     reconnectTimeoutId = null;
     ensureSocket();
-  }, RECONNECT_DELAY_MS);
+  }, delay);
+}
+
+function reconnectNow(): void {
+  if (reconnectTimeoutId !== null) {
+    window.clearTimeout(reconnectTimeoutId);
+    reconnectTimeoutId = null;
+  }
+  reconnectAttempt = 0;
+  ensureSocket();
+}
+
+function forceReconnect(): void {
+  const previousSocket = socket;
+  if (previousSocket) {
+    socket = null;
+    closeMessagePorts();
+    failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
+    previousSocket.close();
+  }
+  reconnectNow();
+}
+
+function maybeProbeAuthFailure(): void {
+  if (
+    consecutiveConnectFailures % AUTH_PROBE_FAILURE_INTERVAL !== 0 ||
+    authProbeInFlight
+  ) {
+    return;
+  }
+  authProbeInFlight = true;
+  void fetch("/", { method: "HEAD", cache: "no-store" })
+    .then((response) => {
+      if (response.status === 401) {
+        clearStatsigSnapshots();
+        console.error(
+          "[electron-stub] IPC bridge auth rejected; reloading to show sign-in instructions",
+        );
+        window.location.reload();
+      }
+    })
+    .catch(() => {})
+    .finally(() => {
+      authProbeInFlight = false;
+    });
 }
 
 function ensureSocket(): void {
@@ -239,13 +377,29 @@ function ensureSocket(): void {
     return;
   }
 
-  socket = new WebSocket(
+  const currentSocket = new WebSocket(
     `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/__backend/ipc`,
   );
-  socket.addEventListener("open", () => {
+  socket = currentSocket;
+  let opened = false;
+
+  currentSocket.addEventListener("open", () => {
+    if (socket !== currentSocket) {
+      return;
+    }
+    opened = true;
+    reconnectAttempt = 0;
+    consecutiveConnectFailures = 0;
     flushOutboundQueue();
+    if (hasConnectedBefore) {
+      scheduleReconnectRecovery();
+    }
+    hasConnectedBefore = true;
   });
-  socket.addEventListener("message", (event) => {
+  currentSocket.addEventListener("message", (event) => {
+    if (socket !== currentSocket) {
+      return;
+    }
     try {
       const message = JSON.parse(String(event.data)) as MainToRendererMessage;
       handleIncomingMessage(message);
@@ -256,14 +410,23 @@ function ensureSocket(): void {
       );
     }
   });
-  socket.addEventListener("close", () => {
-    for (const port of messagePorts.values()) {
-      port.close();
+  currentSocket.addEventListener("close", () => {
+    if (socket !== currentSocket) {
+      return;
     }
-    messagePorts.clear();
+    socket = null;
+    if (!opened) {
+      consecutiveConnectFailures += 1;
+      maybeProbeAuthFailure();
+    }
+    closeMessagePorts();
+    failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
     scheduleReconnect();
   });
-  socket.addEventListener("error", () => {
+  currentSocket.addEventListener("error", () => {
+    if (socket !== currentSocket) {
+      return;
+    }
     scheduleReconnect();
   });
 }
@@ -322,6 +485,15 @@ function isUnhandledAddWorkspaceRootOptionMessage(value: unknown): value is {
   );
 }
 
+function isPickWorkspaceRootOptionMessage(value: unknown): value is {
+  allowMultiple?: unknown;
+  type: "electron-pick-workspace-root-option";
+} {
+  return (
+    isRecord(value) && value.type === "electron-pick-workspace-root-option"
+  );
+}
+
 function isOpenInBrowserMessage(value: unknown): value is {
   type: "open-in-browser";
   url: string;
@@ -352,6 +524,8 @@ const themeMediaQuery = matchMedia("(prefers-color-scheme: dark)");
 const mobileMediaQuery = matchMedia("(max-width: 768px)");
 const initialSidebarState = !mobileMediaQuery.matches;
 const electronShim = (window.__ELECTRON_SHIM__ ??= {});
+electronShim.configureStatsigClient = (client, sdkKey) =>
+  configureStatsigClient(client, sdkKey, __CODEX_WEB_BUILD_ID__);
 const buildFlavor: "prod" | "dev" | "agent" | string = "prod";
 
 Object.assign(globalThis, {
@@ -382,6 +556,34 @@ electronShim.overrideAdapter = {
     }
 
     return null;
+  },
+  getDynamicConfigOverride(evaluation) {
+    if (evaluation.name !== "107580212") {
+      return null;
+    }
+    const value =
+      evaluation.value && typeof evaluation.value === "object"
+        ? (evaluation.value as Record<string, unknown>)
+        : {};
+    const existing = Array.isArray(value.available_models)
+      ? (value.available_models as string[])
+      : [];
+    if (existing.length === 0) {
+      return null;
+    }
+    const additions = [
+      "gpt-6-astra",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+    ].filter((model) => !existing.includes(model));
+    if (additions.length === 0) {
+      return null;
+    }
+    return {
+      ...evaluation,
+      value: { ...value, available_models: [...existing, ...additions] },
+    };
   },
 };
 
@@ -443,6 +645,19 @@ export const ipcRenderer = {
           }
 
           return invokeMain(channel, [{ ...args[0], root }]);
+        });
+      }
+
+      if (isPickWorkspaceRootOptionMessage(args[0])) {
+        return openSelectWorkspaceRootDialog({
+          listDirectory: requestWorkspaceDirectoryEntries,
+        }).then((root) => {
+          if (root) {
+            emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [
+              { type: "workspace-root-option-picked", root },
+            ]);
+          }
+          return undefined;
         });
       }
     }
@@ -572,6 +787,15 @@ export const ipcRenderer = {
 };
 
 ensureSocket();
+installBrowserFileUploadBridge();
+installMobileViewportGuard();
+
+window.addEventListener("online", forceReconnect);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    reconnectNow();
+  }
+});
 
 export const contextBridge = {
   exposeInMainWorld(_key: string, _api: unknown): void {
@@ -580,7 +804,7 @@ export const contextBridge = {
 };
 
 export const webUtils = {
-  getPathForFile(_file: File): string | null {
-    return unimplemented("webUtils.getPathForFile");
+  getPathForFile(file: File): string | null {
+    return getUploadedFilePath(file);
   },
 };

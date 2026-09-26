@@ -516,12 +516,28 @@ function WorkspaceRootDialog({
   );
 }
 
+const SHIELDED_EVENTS = [
+  "pointerdown",
+  "pointerup",
+  "mousedown",
+  "mouseup",
+  "click",
+  "dblclick",
+  "touchstart",
+  "touchend",
+  "focusin",
+  "contextmenu",
+] as const;
+
 function ensureHost(): HTMLElement {
   const DIALOG_ID = "codex-web-workspace-root-dialog";
   let element = document.getElementById(DIALOG_ID);
   if (!element) {
     element = document.createElement("div");
     element.id = DIALOG_ID;
+    for (const eventName of SHIELDED_EVENTS) {
+      element.addEventListener(eventName, (event) => event.stopPropagation());
+    }
     document.body.append(element);
   }
   return element;

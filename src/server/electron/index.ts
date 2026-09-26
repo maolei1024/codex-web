@@ -479,6 +479,16 @@ class BrowserWindow {
           if (sendArgs.length === 0 || typeof sendArgs[0] !== "string") {
             return;
           }
+          // Browser tabs represent the primary live Electron window. The
+          // desktop bundle also creates secondary shell windows and registers
+          // them for app-server notifications; forwarding every window would
+          // duplicate streaming deltas in every tab.
+          const primaryWindow = BrowserWindow.allWindows.find(
+            (window) => !window.destroyed,
+          );
+          if (primaryWindow?.id !== this.id) {
+            return;
+          }
           const [channel, ...args] = sendArgs as [string, ...unknown[]];
           getIpcMainBridgeState().broadcastToRenderer?.({
             type: "ipc-main-event",
