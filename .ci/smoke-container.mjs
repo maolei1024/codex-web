@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
@@ -33,6 +33,13 @@ for (const output of [child.stdout, child.stderr]) {
   output.on("data", (chunk) => { diagnosticOutput = (diagnosticOutput + chunk).slice(-16_000); });
 }
 const exited = once(child, "exit");
+async function processIdentity(pid) {
+  try {
+    const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return { pid, parent: Number(fields[1]), started: fields[19] };
+  } catch { return null; }
+}
 try {
   const url = "http://127.0.0.1:18214";
   let response;
@@ -77,7 +84,29 @@ try {
   console.error(diagnosticOutput);
   throw error;
 } finally {
-  try { process.kill(-child.pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+  // Git helpers can create their own process groups; stop the complete test
+  // subtree before removing its state. Never kill a PID that has been reused.
+  const processes = (await Promise.all((await readdir("/proc"))
+    .filter((name) => /^\d+$/.test(name)).map((pid) => processIdentity(Number(pid)))))
+    .filter(Boolean);
+  const owned = new Set([child.pid]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const process of processes) if (owned.has(process.parent) && !owned.has(process.pid)) {
+      owned.add(process.pid); changed = true;
+    }
+  }
+  const stop = async (signal) => {
+    for (const entry of processes.filter((entry) => owned.has(entry.pid)).reverse()) {
+      if ((await processIdentity(entry.pid))?.started === entry.started) {
+        try { process.kill(entry.pid, signal); } catch (error) { if (error.code !== "ESRCH") throw error; }
+      }
+    }
+  };
+  await stop("SIGTERM");
   await exited;
-  await rm(root, { recursive: true, force: true });
+  await delay(200);
+  await stop("SIGKILL");
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
