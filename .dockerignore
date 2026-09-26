@@ -1,0 +1,14 @@
+*
+!package.json
+!package-lock.json
+!local-build.json
+!vite.browser.config.ts
+!assets/**
+!patches/**
+!scripts/**
+!src/**
+!test/**
+!.ci/smoke-container.mjs
+src/server/**/*.js
+src/server/**/*.map
+src/server/**/*.d.ts

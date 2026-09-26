@@ -1,0 +1,16 @@
+[Unit]
+Description=Independent Codex backend for codex-web SSH projects
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/srv/services/codex-web-remote/env
+WorkingDirectory=/srv/services/codex-web-remote
+ExecStart=/srv/services/codex-web-remote/bin/start
+Restart=on-failure
+RestartSec=5
+UMask=0077
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

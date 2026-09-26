@@ -1,0 +1,9 @@
+#!/bin/sh
+# Install as /srv/services/codex-web-remote/bin/ssh-command for a dedicated key.
+set -eu
+set -a
+. /srv/services/codex-web-remote/env
+set +a
+export CODEX_SSH_SKIP_APP_SERVER_BOOT=true
+test -n "${SSH_ORIGINAL_COMMAND:-}" || exit 64
+exec /bin/sh -c "$SSH_ORIGINAL_COMMAND"

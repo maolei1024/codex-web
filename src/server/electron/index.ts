@@ -69,7 +69,9 @@ function getIpcMainBridgeState(): IpcMainBridgeState {
 }
 
 function log(method: string, args: unknown[]): void {
-  console.log(`[electron-main-stub] ${method}`, args);
+  if (process.env.CODEX_WEB_DEBUG_IPC === "1") {
+    console.log(`[electron-main-stub] ${method}`, args);
+  }
 }
 
 function createDeepStub(pathLabel: string): StubFunction {
@@ -335,6 +337,12 @@ const appBase = {
     }
     if (name === "documents") {
       return resolve(process.env.CODEX_WEB_DOCUMENTS_DIR || homedir());
+    }
+    if (
+      process.env.CODEX_WEB_DATA_DIR &&
+      ["userData", "sessionData", "cache", "logs", "temp"].includes(name)
+    ) {
+      return resolve(process.env.CODEX_WEB_DATA_DIR, name);
     }
     return process.cwd();
   },

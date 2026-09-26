@@ -1,0 +1,44 @@
+depends_on: [build]
+labels:
+  arch: amd64
+when:
+  - event: [push, manual]
+    branch: main
+steps:
+  - name: manifest
+    image: docker.io/library/python:3.12-alpine
+    commands:
+      - python3 .ci/image_release.py merge codex/web build-${CI_PIPELINE_NUMBER} amd64 arm64 --alias latest
+      - python3 .ci/image_release.py pin-files
+    environment:
+      NEXUS_USERNAME: {from_secret: nexus_username}
+      NEXUS_PASSWORD: {from_secret: nexus_password}
+  - name: apply
+    image: bitnami/kubectl:latest
+    commands:
+      - umask 077
+      - printf '%s' "$${K8S_KUBECONFIG}" > /tmp/kubeconfig
+      - export KUBECONFIG=/tmp/kubeconfig
+      - kubectl apply --validate=false --openapi-patch=false -f k8s/codex-web.yaml
+      - kubectl -n project-codex-web rollout status deployment/codex-web --timeout=10m
+    environment:
+      K8S_KUBECONFIG: {from_secret: k8s_kubeconfig}
+  - name: notify-success
+    image: docker.nexus.ixuni.win/mlntfy/ci:latest
+    pull: true
+    when: [{status: [success]}]
+    settings:
+      url: https://mlntfy.project.k3s.ixuni.win
+      topic: mlNtfy
+      status: success
+      tags: ci,success
+  - name: notify-failure
+    image: docker.nexus.ixuni.win/mlntfy/ci:latest
+    pull: true
+    when: [{status: [failure]}]
+    settings:
+      url: https://mlntfy.project.k3s.ixuni.win
+      topic: mlNtfy
+      status: failure
+      priority: high
+      tags: ci,failure

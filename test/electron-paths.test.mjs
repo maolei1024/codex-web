@@ -7,6 +7,21 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 const { app } = require("../src/server/electron/index.js");
 
+test("persistent Electron state can be separated from installed application files", () => {
+  const previous = process.env.CODEX_WEB_DATA_DIR;
+  process.env.CODEX_WEB_DATA_DIR = "/data/app";
+  try {
+    for (const name of ["userData", "sessionData", "cache", "logs", "temp"]) {
+      assert.equal(app.getPath(name), `/data/app/${name}`);
+    }
+    assert.equal(app.getAppPath(), process.cwd());
+    assert.equal(app.getPath("home"), homedir());
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_WEB_DATA_DIR;
+    else process.env.CODEX_WEB_DATA_DIR = previous;
+  }
+});
+
 test("ChatGPT projects default to the user's home instead of the source or release directory", () => {
   const previous = process.env.CODEX_WEB_DOCUMENTS_DIR;
   delete process.env.CODEX_WEB_DOCUMENTS_DIR;

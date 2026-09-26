@@ -1,0 +1,42 @@
+matrix:
+  ARCH: [amd64, arm64]
+labels:
+  arch: ${ARCH}
+when:
+  - event: [push, manual]
+    branch: main
+steps:
+  - name: release-contract
+    image: docker.io/library/python:3.12-alpine
+    commands:
+      - python3 .ci/test_release_contract.py .ci/image_release.py
+  - name: test-build-push
+    image: docker.io/woodpeckerci/plugin-docker-buildx:6.1.1
+    settings:
+      registry: docker.nexus.ixuni.win
+      repo: docker.nexus.ixuni.win/codex/web
+      tags: candidate-${CI_PIPELINE_NUMBER}-${ARCH}
+      platforms: linux/${ARCH}
+      username: {from_secret: nexus_username}
+      password: {from_secret: nexus_password}
+      labels:
+        - org.opencontainers.image.source=https://github.com/maolei1024/codex-web
+        - org.opencontainers.image.revision=${CI_COMMIT_SHA}
+        - org.opencontainers.image.version=build-${CI_PIPELINE_NUMBER}
+  - name: publish-architecture
+    image: docker.io/library/python:3.12-alpine
+    commands:
+      - python3 .ci/image_release.py promote codex/web candidate-${CI_PIPELINE_NUMBER}-${ARCH} build-${CI_PIPELINE_NUMBER}-${ARCH} ${ARCH}
+    environment:
+      NEXUS_USERNAME: {from_secret: nexus_username}
+      NEXUS_PASSWORD: {from_secret: nexus_password}
+  - name: notify-failure
+    image: docker.nexus.ixuni.win/mlntfy/ci:latest
+    pull: true
+    when: [{status: [failure]}]
+    settings:
+      url: https://mlntfy.project.k3s.ixuni.win
+      topic: mlNtfy
+      status: failure
+      priority: high
+      tags: ci,failure,build,${ARCH}

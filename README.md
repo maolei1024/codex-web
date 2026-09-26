@@ -101,7 +101,52 @@ nix shell github:0xcaff/codex-web github:0xcaff/codex-web#codex_remote_proxy -c 
 program to use; when run directly in a terminal it will wait for protocol input
 rather than opening an interactive prompt.
 
-## security
+## Container and cluster deployment
+
+The container pins Node 22.22.0, Codex CLI 0.156.1 and the Desktop version above.
+Its native amd64 and arm64 builds run `npm test` and a packaged runtime smoke
+check before publication. Woodpecker builds on `main` push/manual, publishes
+`docker.nexus.ixuni.win/codex/web:build-N`, and applies `k8s/codex-web.yaml`.
+Both architectures must pass before the combined image and `latest` are published.
+The deployment uses a single replica on ml256 and a 10 GiB Longhorn PVC.
+
+Mount persistent storage at `/data`. The container keeps its home in `/data/home`,
+Codex state in `/data/codex`, Electron state in `/data/app`, documents in
+`/data/documents/ChatGPT`, and bounded temporary uploads in `/data/uploads`.
+Outside containers, `CODEX_WEB_DATA_DIR` optionally relocates Electron userData,
+sessionData, cache, logs and temp; unset preserves the existing defaults.
+`CODEX_WEB_DEBUG_IPC=1` enables verbose IPC logging, including potentially sensitive
+arguments. It is off by default.
+
+Provision `project-codex-web/codex-web-auth` with a `token` key and
+`project-codex-web/codex-web-seed` before the first CI deployment. The seed Secret
+accepts `config.toml`, `auth.json`, `remote-connections.json`, `ssh-config`,
+`ssh-known-hosts`, and `ssh-private-key`. Initial config/auth/remote connections
+are copied only when absent; SSH material is refreshed on container startup.
+Keep credentials, real project inventories and these Secret values outside Git.
+The connection seed follows the Desktop schema:
+
+```json
+{"version":1,"remoteConnections":[{"sshAlias":"development-host","projects":[{"remotePath":"/srv/projects/example","label":"Example"}]}]}
+```
+
+For an independent backend on the project host, install the user unit from
+`deploy/codex-web-remote.service` and copy `scripts/remote-start` and
+`scripts/remote-ssh-command` to `/srv/services/codex-web-remote/bin/start` and
+`bin/ssh-command`. Create a private `env` file in that service directory defining
+`CODEX_HOME`, `CODEX_CLI_PATH`, `CODEX_INSTALL_DIR` and `PATH`, using an independent
+state directory and the installed CLI. Seed required model/MCP/skill configuration
+without copying conversations. Use a dedicated SSH key with the authorized_keys
+option `restrict,command="/srv/services/codex-web-remote/bin/ssh-command"`, pin the
+host key, and enable the user service with lingering. The wrapper selects that
+backend's state and disables Desktop's automatic server bootstrap; it still
+allows commands as the project owner. It is not a sandbox or command allowlist.
+
+The Web instance uses native SSH/app-server transport. Project files, task
+commands and MCP processes remain on the remote host. Existing services and
+conversation stores can continue running independently.
+
+## Security
 
 run `codex-web` only on trusted networks. treat anyone who can reach the
 `codex-web` server as someone who can operate codex on the host machine as the

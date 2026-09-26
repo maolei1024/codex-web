@@ -1,0 +1,127 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: project-codex-web
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: codex-web-data
+  namespace: project-codex-web
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: codex-web
+  namespace: project-codex-web
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: codex-web
+  template:
+    metadata:
+      labels:
+        app: codex-web
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: ml256
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: codex-web
+          image: docker.nexus.ixuni.win/codex/web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8214
+          env:
+            - name: CODEX_WEB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: codex-web-auth
+                  key: token
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          startupProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 20
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: seed
+              mountPath: /run/codex-web-seed
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: codex-web-data
+        - name: seed
+          secret:
+            secretName: codex-web-seed
+            defaultMode: 0440
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: codex-web
+  namespace: project-codex-web
+spec:
+  selector:
+    app: codex-web
+  ports:
+    - name: http
+      port: 8214
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: codex-web
+  namespace: project-codex-web
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "500m"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/enable-access-log: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: codex-web.project.k3s.ixuni.win
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: codex-web
+                port:
+                  name: http

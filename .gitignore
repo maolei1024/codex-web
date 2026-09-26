@@ -18,3 +18,4 @@ uploads/
 .env
 .env.*
 !.env.example
+.ci/digests/
