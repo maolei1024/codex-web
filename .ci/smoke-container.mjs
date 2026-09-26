@@ -22,9 +22,13 @@ const env = {
   CODEX_WEB_TOKEN: "container-smoke-only",
 };
 await initializeContainer(env);
-const child = spawn(process.execPath, ["/app/src/server/main.js", "server", "--host", "127.0.0.1", "--port", "18214"], {
-  env, detached: true, stdio: "ignore",
+const child = spawn(process.execPath, ["/app/src/server/main.js", "--host", "127.0.0.1", "--port", "18214"], {
+  env, detached: true, stdio: ["ignore", "pipe", "pipe"],
 });
+let diagnosticOutput = "";
+for (const output of [child.stdout, child.stderr]) {
+  output.on("data", (chunk) => { diagnosticOutput = (diagnosticOutput + chunk).slice(-16_000); });
+}
 const exited = once(child, "exit");
 try {
   const url = "http://127.0.0.1:18214";
@@ -42,6 +46,9 @@ try {
   await delay(2000);
   assert.equal(child.exitCode, null, "Desktop bridge must remain running");
   console.log(`Container smoke passed: ${process.arch}, native addons, authentication, WebSocket, Desktop startup`);
+} catch (error) {
+  console.error(diagnosticOutput);
+  throw error;
 } finally {
   try { process.kill(-child.pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
   await exited;

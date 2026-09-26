@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 node /app/scripts/container-init.mjs
-exec node /app/src/server/main.js server "$@"
+exec node /app/src/server/main.js "$@"
