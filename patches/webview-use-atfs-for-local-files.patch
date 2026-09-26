@@ -1,11 +1,11 @@
---- a/webview/assets/app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js
-+++ b/webview/assets/app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js
-@@ -253935,7 +253935,7 @@
-         })));
+--- a/webview/assets/app-initial-236e1501144c.js
++++ b/webview/assets/app-initial-236e1501144c.js
+@@ -237112,7 +237112,7 @@
+     (X(), (yIr = `${nTt}@${s_}`), (bIr = `com.apple.MobileSMS`));
    });
- function qbr(e) {
--  return `${Xbr}${Ybr(e)}`;
-+  return Ybr(e);
+ function SIr(e) {
+-  return `${TIr}${wIr(e)}`;
++  return wIr(e);
  }
- function Jbr(e) {
-   return Ybr(e);
+ function CIr(e) {
+   return wIr(e);

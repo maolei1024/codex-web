@@ -2,6 +2,28 @@
 
 a browser frontend for codex desktop, running on a machine you control.
 
+This is the maintained [maolei1024 fork](https://github.com/maolei1024/codex-web)
+of [0xcaff/codex-web](https://github.com/0xcaff/codex-web). It includes token and
+cookie authentication, bounded uploads, browser downloads, mobile layout and
+reconnection improvements, and compressed, versioned assets. The Desktop bundle
+is pinned to `26.901.41123`; the host supplies the Codex CLI.
+
+Use one source checkout. User projects belong in `~/ChatGPT`, and credentials
+belong in the service environment outside Git. `CODEX_WEB_DOCUMENTS_DIR` can
+override the parent of the `ChatGPT` project directory. Build output under
+`scratch/` and `src/server/` is generated and ignored. Keep historical versions
+in Git instead of copying the checkout to dated directories.
+
+For local development, run `npm ci` with Node 22 or later, `unzip`, `patch`, and
+the native build tools required by the dependencies installed. The prepare
+lifecycle downloads and patches the pinned Desktop bundle. `npm test` builds
+the server and browser and runs the regression tests. A source update does not
+change an existing service deployment.
+
+`local-build.json` is the tracked asset-version manifest. Change its ID when
+shipping changed browser assets, then rebuild; the server checks that this ID
+matches the generated `asset-version.json` before serving them.
+
 https://github.com/user-attachments/assets/0a33cbd8-741c-412c-9e75-46dfe9324596
 
 ## motivation
@@ -29,13 +51,13 @@ it.
 run it with `npx`:
 
 ```bash
-npx --yes github:0xcaff/codex-web
+npx --yes github:maolei1024/codex-web
 ```
 
 or with nix:
 
 ```bash
-nix run github:0xcaff/codex-web
+nix run github:maolei1024/codex-web
 ```
 
 then open <http://127.0.0.1:8214> in a browser.
@@ -60,89 +82,35 @@ it's possible to hook codex-web up to an already-running app server using the
 start a long-lived app server somewhere:
 
 ```bash
-codex app-server --listen unix:///tmp/codex-app-server.sock
+mkdir -p /tmp/codex-app-server
+cd /tmp/codex-app-server
+codex app-server --listen unix://codex-app-server.sock
 ```
 
 then run `codex-web` with the proxy helper:
 
 ```bash
 nix shell github:0xcaff/codex-web github:0xcaff/codex-web#codex_remote_proxy -c bash -lc '
-  export CODEX_UNIX_SOCKET=/tmp/codex-app-server.sock
+  export CODEX_UNIX_SOCKET=/tmp/codex-app-server/codex-app-server.sock
   export CODEX_CLI_PATH="$(command -v codex_remote_proxy)"
   codex-web
 '
 ```
 
+`codex app-server proxy --sock ...` is a raw stdio protocol bridge for another
+program to use; when run directly in a terminal it will wait for protocol input
+rather than opening an interactive prompt.
+
 ## security
 
-treat anyone who can reach the `codex-web` server as someone who can operate
-codex on the host machine as the same user running the server.
+run `codex-web` only on trusted networks. treat anyone who can reach the
+`codex-web` server as someone who can operate codex on the host machine as the
+same user running the server.
 
-### token auth
-
-for exposure beyond localhost, `codex-web` requires a fixed access token:
-
-```bash
-codex-web --host 0.0.0.0 --token my-secret-token
-# or: CODEX_WEB_TOKEN=my-secret-token codex-web --host 0.0.0.0
-```
-
-binding to a non-loopback host without a token is refused at startup.
-localhost stays token-free unless a token is configured.
-
-to sign in, open `https://your-host/?token=my-secret-token` once. the server
-sets an http-only cookie, redirects to strip the token from the url, and every
-subsequent request (pages, assets, uploads, the websocket bridge) is
-authenticated by that cookie.
-
-when exposing to the public internet, terminate TLS in a reverse proxy
-(caddy, nginx, cloudflare tunnel, ...) in front of `codex-web`. the proxy must
-forward the `Upgrade`/`Connection` headers (websocket) and `X-Forwarded-Proto`
-(so the auth cookie is marked `Secure`). sending the token over plain public
-http leaks it.
-
-uploads are capped at 100mb by default; tune with `--max-upload-bytes` or
-`CODEX_WEB_MAX_UPLOAD_BYTES`.
-
-alternatively, keep it off the public internet entirely: proxy through
-wireguard, tailscale, or an ssh tunnel.
-
-### reverse proxy (nginx)
-
-proxy everything to `codex-web` — do **not** point nginx `root`/`try_files`
-at the webview directory and do **not** enable `proxy_cache` for it: both
-serve content without going through token auth. static assets are already
-fast from the app server: content-hashed bundles get
-`cache-control: immutable` (repeat visits skip the download entirely) and are
-served pre-compressed (brotli/gzip, generated at build time).
-
-```nginx
-map $http_upgrade $connection_upgrade {
-  default upgrade;
-  ""      close;
-}
-
-server {
-  listen 443 ssl;
-  http2 on;
-  server_name codex.example.com;
-
-  # ssl_certificate     /path/fullchain.pem;
-  # ssl_certificate_key /path/privkey.pem;
-
-  client_max_body_size 100m;  # keep in sync with --max-upload-bytes
-
-  location / {
-    proxy_pass http://127.0.0.1:8214;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection $connection_upgrade;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_read_timeout 300s;  # websocket idle; the server pings every 20s
-  }
-}
-```
+This fork requires `CODEX_WEB_TOKEN` when listening outside loopback. Visit
+`?token=<token>` once to establish an HttpOnly cookie; the redirect removes the
+token from the URL. Serve the application over trusted HTTPS and protect access
+to the host. Keep tokens out of Git, proxy logs, and shared URLs.
 
 someone with access to the web ui may be able to:
 

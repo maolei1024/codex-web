@@ -10,28 +10,18 @@ import {
 import { getUploadedFilePath } from "./uploaded-file-paths";
 import { installMobileViewportGuard } from "./mobile-viewport";
 import { reconnectDelayMs } from "./reconnect";
-
+import { downloadErrorMessage, wrapBrowserServices } from "./downloads";
 import {
-  installWorkspaceRootDialog,
+  clearStatsigSnapshots,
+  configureStatsigClient,
+  type StatsigClientLike,
+} from "./statsig-cache";
+import {
   openSelectWorkspaceRootDialog,
   type WorkspaceDirectoryEntries,
 } from "./workspace-root-dialog";
 
 type IpcListener = (event: unknown, ...args: unknown[]) => void;
-
-// The upstream preload runs inside Electron where `process` is available and
-// reads process.platform/arch (e.g. isIntelMacBuild). Provide a minimal stand-in
-// before any of that code executes in the browser.
-const globalWithProcess = globalThis as typeof globalThis & {
-  process?: {
-    platform?: string;
-    arch?: string;
-    env?: Record<string, string | undefined>;
-  };
-};
-if (globalWithProcess.process == null) {
-  globalWithProcess.process = { platform: "linux", arch: "x64", env: {} };
-}
 
 type RendererToMainMessage =
   | {
@@ -39,6 +29,21 @@ type RendererToMainMessage =
       requestId: string;
       channel: string;
       args: unknown[];
+    }
+  | {
+      type: "ipc-renderer-post-message";
+      channel: string;
+      message: unknown;
+      portIds: string[];
+    }
+  | {
+      type: "message-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "message-port-close";
+      portId: string;
     }
   | {
       type: "ipc-renderer-send";
@@ -50,35 +55,9 @@ type RendererToMainMessage =
       requestId: string;
       directoryPath: string | null;
       directoriesOnly: boolean;
-    }
-  | {
-      type: "app-host-port-connect";
-      portId: string;
-      channel: string;
-    }
-  | {
-      type: "app-host-port-message";
-      portId: string;
-      data: unknown;
-    }
-  | {
-      type: "app-host-port-close";
-      portId: string;
     };
 
 type MainToRendererMessage =
-  | {
-      type: "ping";
-    }
-  | {
-      type: "app-host-port-message";
-      portId: string;
-      data: unknown;
-    }
-  | {
-      type: "app-host-port-close";
-      portId: string;
-    }
   | {
       type: "ipc-main-event";
       channel: string;
@@ -107,13 +86,16 @@ type MainToRendererMessage =
       requestId: string;
       ok: false;
       errorMessage: string;
+    }
+  | {
+      type: "message-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "message-port-close";
+      portId: string;
     };
-
-const CLIENT_STALE_TIMEOUT_MS = 45_000;
-const STALENESS_CHECK_INTERVAL_MS = 10_000;
-const AUTH_PROBE_FAILURE_INTERVAL = 5;
-const DISCONNECT_ERROR_MESSAGE =
-  "[electron-stub] IPC bridge disconnected before the response arrived; the connection is being retried";
 
 type MemoryNavigationChange = {
   action: "POP" | "PUSH" | "REPLACE";
@@ -127,23 +109,39 @@ type MemoryNavigationChange = {
   };
 };
 
+type StatsigGateEvaluation = {
+  name: string;
+  value: boolean;
+  [key: string]: unknown;
+};
+
+type StatsigDynamicConfigEvaluation = {
+  name: string;
+  value: unknown;
+  [key: string]: unknown;
+};
+
 type ElectronShimState = {
+  wrapBrowserServices?: typeof wrapBrowserServices;
+  downloadErrorMessage?: typeof downloadErrorMessage;
+  configureStatsigClient?: <T extends StatsigClientLike>(
+    client: T,
+    sdkKey: string,
+  ) => T;
   initialRoute?: string;
   initialSidebarState?: boolean;
   closeSidebar?: () => void;
   onMemoryNavigationChanged?: (navigation: MemoryNavigationChange) => void;
   overrideAdapter?: {
     getGateOverride?: (
-      e: StatsigGateEvaluation,
+      evaluation: StatsigGateEvaluation,
       ...args: unknown[]
     ) => StatsigGateEvaluation | null;
+    getDynamicConfigOverride?: (
+      evaluation: StatsigDynamicConfigEvaluation,
+      ...args: unknown[]
+    ) => StatsigDynamicConfigEvaluation | null;
   };
-};
-
-type StatsigGateEvaluation = {
-  name: string;
-  value: boolean;
-  [key: string]: unknown;
 };
 
 declare global {
@@ -153,12 +151,12 @@ declare global {
 }
 
 declare const __CODEX_APP_VERSION__: string;
+declare const __CODEX_WEB_BUILD_ID__: string;
 
 let requestCounter = 0;
 let socket: WebSocket | null = null;
 let reconnectTimeoutId: number | null = null;
 let reconnectAttempt = 0;
-let lastMessageAtMs = Date.now();
 let consecutiveConnectFailures = 0;
 let authProbeInFlight = false;
 const outboundQueue: RendererToMainMessage[] = [];
@@ -177,35 +175,29 @@ const pendingDirectoryEntries = new Map<
   }
 >();
 const rendererListeners = new Map<string, Set<IpcListener>>();
-const bridgedPorts = new Map<string, MessagePort>();
-
+const messagePorts = new Map<string, MessagePort>();
 const MESSAGE_FOR_VIEW_CHANNEL = "codex_desktop:message-for-view";
-// Broadcast events missed while the WebSocket was down (turn/completed,
-// thread/status/changed, ...) are never replayed by the server, and the
-// upstream reconnect-recovery machinery only listens to app-server transport
-// events — it knows nothing about our browser<->server link. Synthesizing
-// codex-app-server-initialized after a reconnect drives the upstream
-// app_server_restart_recovery path: query invalidation, an authoritative
-// thread/list refresh, mark-all-conversations-need-resume and a resume of the
-// currently open conversation. Prefer replaying the last genuine payload when
-// one was observed (server restart while the page was open); otherwise fall
-// back to values matching the deployed codex-cli.
+const AUTH_PROBE_FAILURE_INTERVAL = 5;
+const DISCONNECT_ERROR_MESSAGE =
+  "[electron-stub] IPC bridge disconnected before the response arrived; the connection is being retried";
 let hasConnectedBefore = false;
+let appServerInitializationRevision = 0;
 let reconnectRecoveryTimeoutId: number | null = null;
-let cachedAppServerInitializedMessage: Record<string, unknown> = {
-  type: "codex-app-server-initialized",
-  hostId: "local",
-  appServerVersion: "0.144.1",
-  installedCodexVersion: "0.144.1",
-};
+let cachedAppServerInitializedMessage: Record<string, unknown> | null = null;
 
 function scheduleReconnectRecovery(): void {
   if (reconnectRecoveryTimeoutId !== null) {
     window.clearTimeout(reconnectRecoveryTimeoutId);
   }
+  const expectedRevision = appServerInitializationRevision;
   reconnectRecoveryTimeoutId = window.setTimeout(() => {
     reconnectRecoveryTimeoutId = null;
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+    if (
+      !socket ||
+      socket.readyState !== WebSocket.OPEN ||
+      appServerInitializationRevision !== expectedRevision ||
+      cachedAppServerInitializedMessage === null
+    ) {
       return;
     }
     console.info(
@@ -234,10 +226,6 @@ export function emitRendererEvent(channel: string, args: unknown[]): void {
 }
 
 function handleIncomingMessage(message: MainToRendererMessage): void {
-  if (message.type === "ping") {
-    return;
-  }
-
   if (message.type === "ipc-main-event") {
     if (message.channel === MESSAGE_FOR_VIEW_CHANNEL) {
       const payload = message.args[0];
@@ -247,21 +235,10 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
         payload.hostId === "local"
       ) {
         cachedAppServerInitializedMessage = payload;
+        appServerInitializationRevision += 1;
       }
     }
     emitRendererEvent(message.channel, message.args);
-    return;
-  }
-
-  if (message.type === "app-host-port-message") {
-    bridgedPorts.get(message.portId)?.postMessage(message.data);
-    return;
-  }
-
-  if (message.type === "app-host-port-close") {
-    const port = bridgedPorts.get(message.portId);
-    bridgedPorts.delete(message.portId);
-    port?.close();
     return;
   }
 
@@ -276,6 +253,18 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
       return;
     }
     pending.reject(new Error(message.errorMessage));
+    return;
+  }
+
+  if (message.type === "message-port-message") {
+    messagePorts.get(message.portId)?.postMessage(message.data);
+    return;
+  }
+
+  if (message.type === "message-port-close") {
+    const port = messagePorts.get(message.portId);
+    messagePorts.delete(message.portId);
+    port?.close();
     return;
   }
 
@@ -304,11 +293,7 @@ function flushOutboundQueue(): void {
 
 function failPendingRequests(reason: Error): void {
   const retained = outboundQueue.filter(
-    (message) =>
-      message.type === "ipc-renderer-send" ||
-      message.type === "app-host-port-connect" ||
-      message.type === "app-host-port-message" ||
-      message.type === "app-host-port-close",
+    (message) => message.type === "ipc-renderer-send",
   );
   outboundQueue.length = 0;
   outboundQueue.push(...retained);
@@ -321,6 +306,13 @@ function failPendingRequests(reason: Error): void {
     pending.reject(reason);
   }
   pendingDirectoryEntries.clear();
+}
+
+function closeMessagePorts(): void {
+  for (const port of messagePorts.values()) {
+    port.close();
+  }
+  messagePorts.clear();
 }
 
 function scheduleReconnect(): void {
@@ -344,17 +336,29 @@ function reconnectNow(): void {
   ensureSocket();
 }
 
-function maybeProbeAuthFailure(): void {
-  if (consecutiveConnectFailures % AUTH_PROBE_FAILURE_INTERVAL !== 0) {
-    return;
+function forceReconnect(): void {
+  const previousSocket = socket;
+  if (previousSocket) {
+    socket = null;
+    closeMessagePorts();
+    failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
+    previousSocket.close();
   }
-  if (authProbeInFlight) {
+  reconnectNow();
+}
+
+function maybeProbeAuthFailure(): void {
+  if (
+    consecutiveConnectFailures % AUTH_PROBE_FAILURE_INTERVAL !== 0 ||
+    authProbeInFlight
+  ) {
     return;
   }
   authProbeInFlight = true;
   void fetch("/", { method: "HEAD", cache: "no-store" })
     .then((response) => {
       if (response.status === 401) {
+        clearStatsigSnapshots();
         console.error(
           "[electron-stub] IPC bridge auth rejected; reloading to show sign-in instructions",
         );
@@ -389,7 +393,6 @@ function ensureSocket(): void {
     opened = true;
     reconnectAttempt = 0;
     consecutiveConnectFailures = 0;
-    lastMessageAtMs = Date.now();
     flushOutboundQueue();
     if (hasConnectedBefore) {
       scheduleReconnectRecovery();
@@ -400,7 +403,6 @@ function ensureSocket(): void {
     if (socket !== currentSocket) {
       return;
     }
-    lastMessageAtMs = Date.now();
     try {
       const message = JSON.parse(String(event.data)) as MainToRendererMessage;
       handleIncomingMessage(message);
@@ -415,10 +417,12 @@ function ensureSocket(): void {
     if (socket !== currentSocket) {
       return;
     }
+    socket = null;
     if (!opened) {
       consecutiveConnectFailures += 1;
       maybeProbeAuthFailure();
     }
+    closeMessagePorts();
     failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
     scheduleReconnect();
   });
@@ -484,11 +488,6 @@ function isUnhandledAddWorkspaceRootOptionMessage(value: unknown): value is {
   );
 }
 
-// 26.623's Create-project modal and onboarding flow ask the Electron main
-// process to open a native directory picker (dialog.showOpenDialog) via this
-// message; the pickers reply with a workspace-root-option-picked view message
-// per selected directory. In the browser we substitute our own host-directory
-// dialog and synthesize the reply locally.
 function isPickWorkspaceRootOptionMessage(value: unknown): value is {
   allowMultiple?: unknown;
   type: "electron-pick-workspace-root-option";
@@ -528,52 +527,68 @@ const themeMediaQuery = matchMedia("(prefers-color-scheme: dark)");
 const mobileMediaQuery = matchMedia("(max-width: 768px)");
 const initialSidebarState = !mobileMediaQuery.matches;
 const electronShim = (window.__ELECTRON_SHIM__ ??= {});
+electronShim.wrapBrowserServices = wrapBrowserServices;
+electronShim.downloadErrorMessage = downloadErrorMessage;
+electronShim.configureStatsigClient = (client, sdkKey) =>
+  configureStatsigClient(client, sdkKey, __CODEX_WEB_BUILD_ID__);
+const buildFlavor: "prod" | "dev" | "agent" | string = "prod";
+
+Object.assign(globalThis, {
+  process: {
+    arch: "arm64",
+    platform: "darwin",
+    versions: {
+      electron: "41.2.0",
+    },
+  },
+});
 
 electronShim.overrideAdapter = {
-  getGateOverride(e) {
-    if (e.name === "2929582856") {
-      // codex_app_sunset
+  getGateOverride(evaluation) {
+    if (evaluation.name === "2911712394") {
       return {
-        ...e,
-        value: false,
+        ...evaluation,
+        value: true,
+      };
+    }
+
+    if (evaluation.name === "1042620455") {
+      // Remote control (Slingshot).
+      return {
+        ...evaluation,
+        value: true,
       };
     }
 
     return null;
   },
-  getDynamicConfigOverride(e) {
-    // 107580212 is the model-picker config: its available_models list is the
-    // picker's whitelist (also forwarded as the model/list filter). Statsig is
-    // unreachable from this deployment, so the webview only ever sees the
-    // defaults baked into the bundle at upstream build time — which predate
-    // GPT-5.6. Merge the 5.6 tiers in; app-server's model/list already
-    // returns them, this config only gates visibility. Leave an empty list
-    // untouched: empty means "no whitelist yet" and overriding it would turn
-    // a no-filter state into a 3-model whitelist.
-    if (e.name === "107580212") {
-      const value =
-        e.value && typeof e.value === "object"
-          ? (e.value as Record<string, unknown>)
-          : {};
-      const existing = Array.isArray(value.available_models)
-        ? (value.available_models as string[])
-        : [];
-      if (existing.length === 0) {
-        return null;
-      }
-      const additions = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].filter(
-        (model) => !existing.includes(model),
-      );
-      if (additions.length === 0) {
-        return null;
-      }
-      return {
-        ...e,
-        value: { ...value, available_models: [...existing, ...additions] },
-      };
+  getDynamicConfigOverride(evaluation) {
+    if (evaluation.name !== "107580212") {
+      return null;
     }
-
-    return null;
+    const value =
+      evaluation.value && typeof evaluation.value === "object"
+        ? (evaluation.value as Record<string, unknown>)
+        : {};
+    const existing = Array.isArray(value.available_models)
+      ? (value.available_models as string[])
+      : [];
+    if (existing.length === 0) {
+      return null;
+    }
+    const additions = [
+      "gpt-6-astra",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+    ].filter((model) => !existing.includes(model));
+    if (additions.length === 0) {
+      return null;
+    }
+    return {
+      ...evaluation,
+      value: { ...value, available_models: [...existing, ...additions] },
+    };
   },
 };
 
@@ -614,8 +629,6 @@ electronShim.onMemoryNavigationChanged = (navigation) => {
 
   window.history.pushState(undefined, "", browserPath.path);
 };
-
-const buildFlavor: "prod" | "dev" | "agent" | string = "prod";
 
 export const ipcRenderer = {
   invoke(channel: string, ...args: unknown[]): Promise<unknown> {
@@ -688,28 +701,48 @@ export const ipcRenderer = {
   },
   postMessage(
     channel: string,
-    _message: unknown,
-    transfer?: MessagePort[],
+    message: unknown,
+    transfer?: Transferable[],
   ): void {
-    // Bridge the transferred MessagePort over the WebSocket: frames from the
-    // page are forwarded as app-host-port-message, and the server side hands
-    // a fake MessagePortMain to the upstream ipcMain listener.
-    const port = transfer?.[0];
-    if (!port) {
+    if (transfer && transfer.length > 0) {
+      const portIds = transfer.map((transferable) => {
+        if (!(transferable instanceof MessagePort)) {
+          throw new TypeError(
+            "Only MessagePort transfers are supported by the browser IPC bridge.",
+          );
+        }
+
+        const portId = `message_port_${nextRequestId()}`;
+        messagePorts.set(portId, transferable);
+        transferable.addEventListener("message", (event) => {
+          enqueueMessage({
+            type: "message-port-message",
+            portId,
+            data: event.data,
+          });
+        });
+        transferable.addEventListener("messageerror", () => {
+          messagePorts.delete(portId);
+          enqueueMessage({ type: "message-port-close", portId });
+        });
+        transferable.start();
+        return portId;
+      });
+
+      enqueueMessage({
+        type: "ipc-renderer-post-message",
+        channel,
+        message,
+        portIds,
+      });
       return;
     }
-    requestCounter += 1;
-    const portId = `port-${requestCounter}-${Math.random().toString(36).slice(2)}`;
-    bridgedPorts.set(portId, port);
-    port.onmessage = (event: MessageEvent) => {
-      enqueueMessage({
-        type: "app-host-port-message",
-        portId,
-        data: event.data,
-      });
-    };
-    port.start();
-    enqueueMessage({ type: "app-host-port-connect", portId, channel });
+
+    enqueueMessage({
+      type: "ipc-renderer-send",
+      channel,
+      args: [message],
+    });
   },
   sendSync(channel: string, ..._args: unknown[]): unknown {
     if (channel === "codex_desktop:get-sentry-init-options") {
@@ -732,37 +765,22 @@ export const ipcRenderer = {
 
     if (channel === "codex_desktop:get-shared-object-snapshot") {
       return {
-        host_config: {
-          id: "local",
-          display_name: "Local",
-          kind: "local",
-        },
-        remote_connections: [],
-        remote_control_connections: [],
+        host_config: { id: "local", display_name: "Local", kind: "local" },
+        remote_ssh_connections: [],
+        remote_wsl_connections: [],
         remote_control_connections_state: {
           available: false,
+          accessRequired: false,
           authRequired: false,
+          clientAuthorized: false,
         },
+        local_remote_control_client_id: null,
         pending_worktrees: [],
-        statsig_default_enable_features: {
-          enable_request_compression: true,
-          collaboration_modes: true,
-          personality: true,
-          request_rule: true,
-          fast_mode: true,
-          image_generation: true,
-          image_detail_original: true,
-          workspace_dependencies: true,
-          guardian_approval: true,
-          apps: true,
-          plugins: true,
-          tool_search: true,
-          tool_suggest: false,
-          tool_call_mcp_elicitation: true,
-          memories: false,
-          realtime_conversation: false,
-        },
       };
+    }
+
+    if (channel === "codex_desktop:get-initial-sidebar-bootstrap") {
+      return null;
     }
 
     if (channel === "codex_desktop:get-system-theme-variant") {
@@ -777,26 +795,7 @@ ensureSocket();
 installBrowserFileUploadBridge();
 installMobileViewportGuard();
 
-window.setInterval(() => {
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    return;
-  }
-  if (Date.now() - lastMessageAtMs <= CLIENT_STALE_TIMEOUT_MS) {
-    return;
-  }
-  console.warn("[electron-stub] IPC bridge connection stale; forcing reconnect");
-  const staleSocket = socket;
-  socket = null;
-  staleSocket.close();
-  failPendingRequests(
-    new Error(
-      "[electron-stub] IPC bridge connection went stale; the connection is being retried",
-    ),
-  );
-  scheduleReconnect();
-}, STALENESS_CHECK_INTERVAL_MS);
-
-window.addEventListener("online", reconnectNow);
+window.addEventListener("online", forceReconnect);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     reconnectNow();

@@ -1,12 +1,19 @@
 #!/usr/bin/env node
 
-import { randomUUID } from "node:crypto";
+declare global {
+  var __CODEX_SHIM_VALUES__: {
+    version: string;
+  };
+}
+
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { Duplex } from "node:stream";
 import { parseArgs as parseCliArgs } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import fastifyMultipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import { installModuleAliasHook } from "./module";
@@ -15,24 +22,40 @@ import {
   assertTokenRequirement,
   installAuthHook,
   isAuthorizedRequest,
+  isSafeRequestTarget,
 } from "./auth";
 import { sanitizeMcpRequestPaths } from "./mcp-request-path-sanitizer";
+import { readAssetVersion } from "./asset-version";
+import { installDownloadHooks } from "./downloads";
+import {
+  parsePositiveInteger,
+  UploadLimitError,
+  UploadStore,
+} from "./upload-store";
 
-type ServerOptions = {
+export type ServerOptions = {
   host: string;
   port: number;
   token: string | null;
   maxUploadBytes: number;
+  maxUploadRequestBytes: number;
+  maxUploadFiles: number;
+  maxUploadDiskBytes: number;
+  uploadTtlMs: number;
+  maxConcurrentUploads: number;
+  uploadRootDir: string;
 };
 
-const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
-
-// Native pings sweep half-open sockets server-side; the app-level ping gives
-// the browser (which cannot observe native pings) traffic to detect staleness
-// against, and keeps reverse-proxy idle timeouts from firing.
+const MEBIBYTE = 1024 * 1024;
+const DEFAULT_MAX_UPLOAD_BYTES = 100 * MEBIBYTE;
+const DEFAULT_MAX_UPLOAD_REQUEST_BYTES = 500 * MEBIBYTE;
+const DEFAULT_MAX_UPLOAD_FILES = 20;
+const DEFAULT_MAX_UPLOAD_DISK_BYTES = 2 * 1024 * MEBIBYTE;
+const DEFAULT_UPLOAD_TTL_MS = 24 * 60 * 60 * 1_000;
+const DEFAULT_MAX_CONCURRENT_UPLOADS = 4;
 const SOCKET_PING_INTERVAL_MS = 30_000;
-const APP_PING_INTERVAL_MS = 20_000;
 const MAX_MISSED_PONGS = 2;
+const MAX_WEBSOCKET_PAYLOAD_BYTES = 64 * MEBIBYTE;
 
 type RendererToMainMessage =
   | {
@@ -40,48 +63,35 @@ type RendererToMainMessage =
       requestId: string;
       channel: string;
       args: unknown[];
-      sourceUrl: string;
     }
   | {
       type: "ipc-renderer-send";
       channel: string;
       args: unknown[];
-      sourceUrl: string;
+    }
+  | {
+      type: "ipc-renderer-post-message";
+      channel: string;
+      message: unknown;
+      portIds: string[];
+    }
+  | {
+      type: "message-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "message-port-close";
+      portId: string;
     }
   | {
       type: "workspace-directory-entries-request";
       requestId: string;
       directoryPath: string | null;
       directoriesOnly: boolean;
-    }
-  | {
-      type: "app-host-port-connect";
-      portId: string;
-      channel: string;
-    }
-  | {
-      type: "app-host-port-message";
-      portId: string;
-      data: unknown;
-    }
-  | {
-      type: "app-host-port-close";
-      portId: string;
     };
 
 type MainToRendererMessage =
-  | {
-      type: "ping";
-    }
-  | {
-      type: "app-host-port-message";
-      portId: string;
-      data: unknown;
-    }
-  | {
-      type: "app-host-port-close";
-      portId: string;
-    }
   | {
       type: "ipc-main-event";
       channel: string;
@@ -110,6 +120,15 @@ type MainToRendererMessage =
       requestId: string;
       ok: false;
       errorMessage: string;
+    }
+  | {
+      type: "message-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "message-port-close";
+      portId: string;
     };
 
 type WorkspaceDirectoryEntry = {
@@ -123,6 +142,92 @@ type WorkspaceDirectoryEntries = {
   parentPath: string | null;
   entries: WorkspaceDirectoryEntry[];
 };
+
+type MessagePortListener = (...args: unknown[]) => void;
+
+type BridgedMessagePort = {
+  close: () => void;
+  on: (event: string, listener: MessagePortListener) => unknown;
+  postMessage: (message: unknown) => void;
+  start: () => void;
+};
+
+class WebSocketMessagePort implements BridgedMessagePort {
+  private closed = false;
+  private readonly listeners = new Map<string, Set<MessagePortListener>>();
+
+  constructor(
+    private readonly portId: string,
+    private readonly sendToRenderer: (message: MainToRendererMessage) => void,
+    private readonly onClosed: () => void,
+  ) {}
+
+  on(event: string, listener: MessagePortListener): this {
+    const listeners = this.listeners.get(event) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(event, listeners);
+
+    return this;
+  }
+
+  postMessage(data: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    this.sendToRenderer({
+      type: "message-port-message",
+      portId: this.portId,
+      data,
+    });
+  }
+
+  start(): void {}
+
+  close(): void {
+    if (!this.markClosed()) {
+      return;
+    }
+    this.sendToRenderer({
+      type: "message-port-close",
+      portId: this.portId,
+    });
+  }
+
+  receiveMessage(data: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    const listeners = this.listeners.get("message");
+    if (!listeners || listeners.size === 0) {
+      return;
+    }
+    for (const listener of listeners) {
+      listener({ data });
+    }
+  }
+
+  disconnect(): void {
+    if (!this.markClosed()) {
+      return;
+    }
+    this.emit("close");
+  }
+
+  private emit(event: string, ...args: unknown[]): void {
+    for (const listener of this.listeners.get(event) ?? []) {
+      listener(...args);
+    }
+  }
+
+  private markClosed(): boolean {
+    if (this.closed) {
+      return false;
+    }
+    this.closed = true;
+    this.onClosed();
+    return true;
+  }
+}
 
 function workspaceDirectoryEntryTypeRank(
   entry: WorkspaceDirectoryEntry,
@@ -152,28 +257,36 @@ function compareWorkspaceDirectoryEntries(
 type IpcMainBridgeState = {
   broadcastToRenderer?: (message: MainToRendererMessage) => void;
   handleRendererInvoke?: (channel: string, args: unknown[]) => Promise<unknown>;
+  handleRendererPostMessage?: (
+    channel: string,
+    message: unknown,
+    ports: BridgedMessagePort[],
+  ) => void;
   handleRendererSend?: (channel: string, args: unknown[]) => void;
-  handleRendererPortConnect?: (portId: string, channel: string) => void;
-  handleRendererPortMessage?: (portId: string, data: unknown) => void;
-  handleRendererPortClose?: (portId: string) => void;
 };
 
 function printUsage(): void {
   console.log(
     [
       "Usage:",
-      "  server [--host <host>] [--port <port>] [--token <token>] [--max-upload-bytes <n>]",
+      "  server [--host <host>] [--port <port>] [--token <token>] [upload limits]",
       "",
       "Defaults:",
       "  --host 127.0.0.1",
       "  --port 8214",
       "  --token unset (or CODEX_WEB_TOKEN); required for non-loopback hosts",
-      "  --max-upload-bytes 104857600 (or CODEX_WEB_MAX_UPLOAD_BYTES)",
+      `  --max-upload-bytes ${DEFAULT_MAX_UPLOAD_BYTES}`,
+      `  --max-upload-request-bytes ${DEFAULT_MAX_UPLOAD_REQUEST_BYTES}`,
+      `  --max-upload-files ${DEFAULT_MAX_UPLOAD_FILES}`,
+      `  --max-upload-disk-bytes ${DEFAULT_MAX_UPLOAD_DISK_BYTES}`,
+      `  --upload-ttl-ms ${DEFAULT_UPLOAD_TTL_MS}`,
+      `  --max-concurrent-uploads ${DEFAULT_MAX_CONCURRENT_UPLOADS}`,
+      `  --upload-root ${os.tmpdir()} (or CODEX_WEB_UPLOAD_ROOT)`,
       "",
       "Examples:",
       "  yarn server",
       "  yarn server --port 9000",
-      "  yarn server --host 0.0.0.0 --token my-secret-token",
+      "  yarn server --host 100.64.0.10 --token my-secret-token",
     ].join("\n"),
   );
 }
@@ -186,17 +299,19 @@ function parsePort(raw: string): number {
   return parsed;
 }
 
-function parseMaxUploadBytes(raw: string): number {
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`Invalid max upload bytes: ${raw}`);
-  }
-  return parsed;
+function parseLimit(
+  cliValue: string | undefined,
+  envValue: string | undefined,
+  fallback: number,
+  label: string,
+): number {
+  const raw = cliValue ?? envValue;
+  return raw === undefined ? fallback : parsePositiveInteger(raw, label);
 }
 
-function parseServerArgs(
+export function parseServerArgs(
   args: string[],
-  env: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv = process.env,
 ): ServerOptions {
   const parsed = parseCliArgs({
     args,
@@ -218,6 +333,24 @@ function parseServerArgs(
       "max-upload-bytes": {
         type: "string",
       },
+      "max-upload-request-bytes": {
+        type: "string",
+      },
+      "max-upload-files": {
+        type: "string",
+      },
+      "max-upload-disk-bytes": {
+        type: "string",
+      },
+      "upload-ttl-ms": {
+        type: "string",
+      },
+      "max-concurrent-uploads": {
+        type: "string",
+      },
+      "upload-root": {
+        type: "string",
+      },
     },
     strict: true,
   });
@@ -231,17 +364,53 @@ function parseServerArgs(
   if (token !== null && token.length === 0) {
     throw new Error("auth token must not be empty");
   }
-
-  const rawMaxUploadBytes =
-    parsed.values["max-upload-bytes"] ?? env.CODEX_WEB_MAX_UPLOAD_BYTES;
+  const uploadRootDir =
+    parsed.values["upload-root"] ?? env.CODEX_WEB_UPLOAD_ROOT ?? os.tmpdir();
+  if (!path.isAbsolute(uploadRootDir)) {
+    throw new Error(`upload root must be absolute: ${uploadRootDir}`);
+  }
 
   return {
     host: parsed.values.host ?? "127.0.0.1",
     port: parsed.values.port ? parsePort(parsed.values.port) : 8214,
     token,
-    maxUploadBytes: rawMaxUploadBytes
-      ? parseMaxUploadBytes(rawMaxUploadBytes)
-      : DEFAULT_MAX_UPLOAD_BYTES,
+    maxUploadBytes: parseLimit(
+      parsed.values["max-upload-bytes"],
+      env.CODEX_WEB_MAX_UPLOAD_BYTES,
+      DEFAULT_MAX_UPLOAD_BYTES,
+      "max upload bytes",
+    ),
+    maxUploadRequestBytes: parseLimit(
+      parsed.values["max-upload-request-bytes"],
+      env.CODEX_WEB_MAX_UPLOAD_REQUEST_BYTES,
+      DEFAULT_MAX_UPLOAD_REQUEST_BYTES,
+      "max upload request bytes",
+    ),
+    maxUploadFiles: parseLimit(
+      parsed.values["max-upload-files"],
+      env.CODEX_WEB_MAX_UPLOAD_FILES,
+      DEFAULT_MAX_UPLOAD_FILES,
+      "max upload files",
+    ),
+    maxUploadDiskBytes: parseLimit(
+      parsed.values["max-upload-disk-bytes"],
+      env.CODEX_WEB_MAX_UPLOAD_DISK_BYTES,
+      DEFAULT_MAX_UPLOAD_DISK_BYTES,
+      "max upload disk bytes",
+    ),
+    uploadTtlMs: parseLimit(
+      parsed.values["upload-ttl-ms"],
+      env.CODEX_WEB_UPLOAD_TTL_MS,
+      DEFAULT_UPLOAD_TTL_MS,
+      "upload TTL milliseconds",
+    ),
+    maxConcurrentUploads: parseLimit(
+      parsed.values["max-concurrent-uploads"],
+      env.CODEX_WEB_MAX_CONCURRENT_UPLOADS,
+      DEFAULT_MAX_CONCURRENT_UPLOADS,
+      "max concurrent uploads",
+    ),
+    uploadRootDir,
   };
 }
 
@@ -262,17 +431,59 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+function sanitizeOutboundMcpRequest(value: unknown): void {
+  const result = sanitizeMcpRequestPaths(value, os.homedir());
+  if (!result) {
+    return;
+  }
+
+  const changedKeys = [...new Set(result.changes.map((change) => change.key))];
+  console.log(
+    `[mcp-request-sanitizer] ${result.method}: normalized ${result.changes.length} path value(s) in ${changedKeys.join(", ")}`,
+  );
+}
+
 function sanitizeOutboundMcpRequestArgs(args: unknown[]): void {
   for (const argument of args) {
-    const result = sanitizeMcpRequestPaths(argument, os.homedir());
-    if (result) {
-      for (const change of result.changes) {
-        console.log(
-          `[mcp-request-sanitizer] ${result.method} ${change.key}: ${JSON.stringify(change.before)} -> ${change.after === null ? "dropped" : JSON.stringify(change.after)}`,
-        );
-      }
-    }
+    sanitizeOutboundMcpRequest(argument);
   }
+}
+
+function uploadErrorStatus(error: unknown): number | null {
+  if (error instanceof UploadLimitError) {
+    return error.statusCode;
+  }
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String(error.code)
+      : "";
+  if (
+    code === "FST_REQ_FILE_TOO_LARGE" ||
+    code === "FST_FILES_LIMIT" ||
+    code === "FST_PARTS_LIMIT" ||
+    code === "FST_FIELDS_LIMIT"
+  ) {
+    return 413;
+  }
+  return null;
+}
+
+function writeRawHttpError(
+  socket: Duplex,
+  statusCode: number,
+  statusText: string,
+  body: { error: string },
+): void {
+  const payload = JSON.stringify(body);
+  socket.end(
+    `HTTP/1.1 ${statusCode} ${statusText}\r\n` +
+      "Content-Type: application/json; charset=utf-8\r\n" +
+      "Cache-Control: no-store\r\n" +
+      `Content-Length: ${Buffer.byteLength(payload)}\r\n` +
+      "Connection: close\r\n" +
+      "\r\n" +
+      payload,
+  );
 }
 
 async function getWorkspaceDirectoryEntries({
@@ -318,6 +529,8 @@ async function getWorkspaceDirectoryEntries({
 }
 
 function ensureElectronLikeProcessContext(): void {
+  process.env.BUILD_FLAVOR = "prod";
+
   const versions = process.versions as NodeJS.ProcessVersions & {
     electron?: string;
   };
@@ -331,9 +544,17 @@ function ensureElectronLikeProcessContext(): void {
   }
 
   const processWithElectronFields = process as NodeJS.Process & {
+    getSystemVersion?: () => string;
     resourcesPath?: string;
     type?: string;
   };
+  const systemVersion =
+    process.platform === "darwin"
+      ? execFileSync("/usr/bin/sw_vers", ["-productVersion"], {
+          encoding: "utf8",
+        }).trim()
+      : os.release();
+  processWithElectronFields.getSystemVersion ??= () => systemVersion;
   processWithElectronFields.resourcesPath ??= path.resolve(
     __dirname,
     "../../scratch/asar",
@@ -341,10 +562,23 @@ function ensureElectronLikeProcessContext(): void {
   processWithElectronFields.type ??= "browser";
 }
 
-async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
+export async function startIpcBridgeServer(
+  options: ServerOptions,
+  { launchDesktopApp = true }: { launchDesktopApp?: boolean } = {},
+): Promise<FastifyInstance> {
   const bridgeState = getIpcMainBridgeState();
   const app = Fastify({ logger: false });
-  const websocketServer = new WebSocketServer({ noServer: true });
+  const websocketServer = new WebSocketServer({
+    noServer: true,
+    maxPayload: MAX_WEBSOCKET_PAYLOAD_BYTES,
+    perMessageDeflate: {
+      threshold: 2 * 1024,
+      concurrencyLimit: 4,
+      serverNoContextTakeover: true,
+      clientNoContextTakeover: true,
+      zlibDeflateOptions: { level: 3 },
+    },
+  });
   const sockets = new Set<WebSocket>();
   const missedPings = new Map<WebSocket, number>();
 
@@ -353,13 +587,25 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
   }
 
   await app.register(fastifyMultipart, {
+    throwFileSizeLimit: true,
     limits: {
       fileSize: options.maxUploadBytes,
+      files: options.maxUploadFiles,
+      fields: 0,
+      parts: options.maxUploadFiles,
     },
   });
 
-  const uploadRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "codex-web-uploads-"),
+  const uploadStore = await UploadStore.create(
+    {
+      maxFileBytes: options.maxUploadBytes,
+      maxRequestBytes: options.maxUploadRequestBytes,
+      maxFiles: options.maxUploadFiles,
+      maxDiskBytes: options.maxUploadDiskBytes,
+      ttlMs: options.uploadTtlMs,
+      maxConcurrentRequests: options.maxConcurrentUploads,
+    },
+    options.uploadRootDir,
   );
 
   app.post("/__backend/upload", async (request, reply) => {
@@ -367,40 +613,58 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       return reply.code(400).send({ error: "expected multipart upload body" });
     }
 
-    const files = await Array.fromAsync(
-      (async function* () {
-        for await (const part of request.files()) {
-          const label = part.filename?.trim() || "upload";
-
-          const uploadedPath = path.join(uploadRoot, randomUUID());
-
-          await fs.writeFile(uploadedPath, await part.toBuffer());
-
-          yield {
-            label,
-            path: uploadedPath,
-            fsPath: uploadedPath,
-          };
-        }
-      })(),
-    );
-
-    return reply.send({ files });
+    try {
+      const files = await uploadStore.saveParts(request.files());
+      return reply.send({ files });
+    } catch (error) {
+      const statusCode = uploadErrorStatus(error);
+      if (statusCode !== null) {
+        return reply.code(statusCode).send({
+          error:
+            error instanceof UploadLimitError
+              ? error.message
+              : "upload exceeds configured limits",
+        });
+      }
+      throw error;
+    }
   });
 
-  await app.register(fastifyStatic, {
-    root: "/",
-    prefix: "/@fs/",
-    decorateReply: false,
+  await app.register(async (fileApp) => {
+    installDownloadHooks(fileApp);
+    // Keep the file sender separate from precompressed webview assets.
+    await fileApp.register(fastifyStatic, {
+      root: "/",
+      prefix: "/@fs/",
+    });
   });
 
   const webviewRoot = path.resolve(__dirname, "../../scratch/asar/webview");
+  const assetVersion = await readAssetVersion(webviewRoot);
+  const versionedAssetPrefix = `/assets/__build/${assetVersion}/`;
 
-  // Bundles under assets/ are content-hashed, so they can be cached forever —
-  // except preload.js(.map), which keeps a stable name across releases and
-  // must be revalidated or stale clients keep a shim that no longer matches
-  // the deployed webview. preCompressed serves the .br/.gz siblings generated
-  // by scripts/precompress.mjs and falls back to the plain file when absent.
+  app.addHook("onSend", async (request, reply) => {
+    const pathname = (request.raw.url ?? request.url).split("?", 1)[0];
+    if (
+      (reply.statusCode === 200 || reply.statusCode === 304) &&
+      (pathname === "/assets/preload.js" ||
+        pathname === "/assets/preload.js.map" ||
+        pathname === `${versionedAssetPrefix}preload.js` ||
+        pathname === `${versionedAssetPrefix}preload.js.map`)
+    ) {
+      reply.header("cache-control", "no-cache");
+    }
+  });
+
+  await app.register(fastifyStatic, {
+    root: path.join(webviewRoot, "assets"),
+    prefix: versionedAssetPrefix,
+    decorateReply: false,
+    preCompressed: true,
+    maxAge: "1y",
+    immutable: true,
+  });
+
   await app.register(fastifyStatic, {
     root: path.join(webviewRoot, "assets"),
     prefix: "/assets/",
@@ -408,12 +672,6 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     preCompressed: true,
     maxAge: "1y",
     immutable: true,
-  });
-
-  app.addHook("onSend", async (request, reply) => {
-    if (request.url.startsWith("/assets/preload.js")) {
-      reply.header("cache-control", "no-cache");
-    }
   });
 
   await app.register(fastifyStatic, {
@@ -427,7 +685,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
   });
 
   app.setNotFoundHandler((request, reply) => {
-    if (request.url.startsWith("/@fs/")) {
+    if (request.url.startsWith("/@fs/") || request.url.startsWith("/assets/")) {
       return reply.code(404).send({ error: "Not Found" });
     }
 
@@ -439,10 +697,24 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
   app.server.on("upgrade", (request, socket, head) => {
     const requestUrl = request.url ?? "/";
-    const host = request.headers.host ?? "localhost";
-    const url = new URL(requestUrl, `http://${host}`);
+    if (!isSafeRequestTarget(requestUrl)) {
+      writeRawHttpError(socket, 400, "Bad Request", {
+        error: "invalid request path",
+      });
+      return;
+    }
+
+    let url: URL;
+    try {
+      url = new URL(requestUrl, "http://localhost");
+    } catch {
+      writeRawHttpError(socket, 400, "Bad Request", {
+        error: "invalid request URL",
+      });
+      return;
+    }
     if (url.pathname !== "/__backend/ipc") {
-      socket.destroy();
+      writeRawHttpError(socket, 404, "Not Found", { error: "not found" });
       return;
     }
 
@@ -454,16 +726,9 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
         url.searchParams.get("token"),
       )
     ) {
-      const body = JSON.stringify({ error: "unauthorized" });
-      socket.write(
-        "HTTP/1.1 401 Unauthorized\r\n" +
-          "Content-Type: application/json\r\n" +
-          `Content-Length: ${Buffer.byteLength(body)}\r\n` +
-          "Connection: close\r\n" +
-          "\r\n" +
-          body,
-      );
-      socket.destroy();
+      writeRawHttpError(socket, 401, "Unauthorized", {
+        error: "unauthorized",
+      });
       return;
     }
 
@@ -485,6 +750,31 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     sockets.add(socket);
     missedPings.set(socket, 0);
 
+    // ws already closes protocol/size/decompression failures with the correct
+    // close code. Consume its error event so a rejected frame cannot terminate
+    // the Node process, and never log frame data or authentication material.
+    socket.on("error", () => {});
+
+    const messagePorts = new Map<string, WebSocketMessagePort>();
+    const dispatchPostMessage = (
+      channel: string,
+      message: unknown,
+      ports: WebSocketMessagePort[],
+    ): void => {
+      const handler = bridgeState.handleRendererPostMessage;
+      if (handler) {
+        handler(channel, message, ports);
+        return;
+      }
+
+      console.error(
+        `[ipc-bridge] no ipcMain postMessage handler for channel ${channel}`,
+      );
+      for (const port of ports) {
+        port.close();
+      }
+    };
+
     socket.on("pong", () => {
       missedPings.set(socket, 0);
     });
@@ -492,6 +782,10 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     socket.on("close", () => {
       sockets.delete(socket);
       missedPings.delete(socket);
+      for (const port of messagePorts.values()) {
+        port.disconnect();
+      }
+      messagePorts.clear();
     });
 
     socket.on("message", (rawData) => {
@@ -504,23 +798,54 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       }
 
       if (message.type === "ipc-renderer-send") {
+        if (!Array.isArray(message.args)) {
+          return;
+        }
         sanitizeOutboundMcpRequestArgs(message.args);
         bridgeState.handleRendererSend?.(message.channel, message.args);
         return;
       }
 
-      if (message.type === "app-host-port-connect") {
-        bridgeState.handleRendererPortConnect?.(message.portId, message.channel);
+      if (message.type === "ipc-renderer-post-message") {
+        if (!Array.isArray(message.portIds)) {
+          return;
+        }
+        sanitizeOutboundMcpRequest(message.message);
+        if (new Set(message.portIds).size !== message.portIds.length) {
+          console.error("[ipc-bridge] duplicate transferred MessagePort id");
+          return;
+        }
+
+        const ports = message.portIds.map((portId) => {
+          const existingPort = messagePorts.get(portId);
+          if (existingPort) {
+            existingPort.disconnect();
+          }
+          const port = new WebSocketMessagePort(
+            portId,
+            (message) => {
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify(message));
+              }
+            },
+            () => messagePorts.delete(portId),
+          );
+          messagePorts.set(portId, port);
+          return port;
+        });
+
+        dispatchPostMessage(message.channel, message.message, ports);
         return;
       }
 
-      if (message.type === "app-host-port-message") {
-        bridgeState.handleRendererPortMessage?.(message.portId, message.data);
+      if (message.type === "message-port-message") {
+        sanitizeOutboundMcpRequest(message.data);
+        messagePorts.get(message.portId)?.receiveMessage(message.data);
         return;
       }
 
-      if (message.type === "app-host-port-close") {
-        bridgeState.handleRendererPortClose?.(message.portId);
+      if (message.type === "message-port-close") {
+        messagePorts.get(message.portId)?.disconnect();
         return;
       }
 
@@ -553,6 +878,9 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       }
 
       if (message.type === "ipc-renderer-invoke") {
+        if (!Array.isArray(message.args)) {
+          return;
+        }
         const { channel, requestId, args } = message;
         sanitizeOutboundMcpRequestArgs(args);
         Promise.resolve(
@@ -589,7 +917,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     });
   });
 
-  setInterval(() => {
+  const pingInterval = setInterval(() => {
     for (const socket of sockets) {
       const missed = missedPings.get(socket) ?? 0;
       if (missed >= MAX_MISSED_PONGS) {
@@ -600,16 +928,39 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       socket.ping();
     }
   }, SOCKET_PING_INTERVAL_MS);
+  pingInterval.unref();
 
-  setInterval(() => {
-    bridgeState.broadcastToRenderer?.({ type: "ping" });
-  }, APP_PING_INTERVAL_MS);
+  app.addHook("onClose", async () => {
+    clearInterval(pingInterval);
+    for (const socket of sockets) {
+      socket.terminate();
+    }
+    sockets.clear();
+    missedPings.clear();
+    websocketServer.close();
+    await uploadStore.dispose();
+  });
 
   await app.listen({ host: options.host, port: options.port });
   console.log(`IPC bridge listening at ws://${options.host}:${options.port}`);
 
+  if (!launchDesktopApp) {
+    return app;
+  }
+
   ensureElectronLikeProcessContext();
   installModuleAliasHook();
+
+  const packageJson = JSON.parse(
+    await fs.readFile(
+      path.resolve(__dirname, "../../scratch/asar/package.json"),
+      "utf8",
+    ),
+  );
+
+  globalThis.__CODEX_SHIM_VALUES__ = {
+    version: packageJson.version,
+  };
 
   const matches = await glob("../../scratch/asar/.vite/build/main-*.js", {
     nodir: true,
@@ -626,6 +977,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
   const module = require(matches[0]!);
   module.runMainAppStartup();
+  return app;
 }
 
 async function main(args: string[]) {
@@ -635,4 +987,9 @@ async function main(args: string[]) {
   await startIpcBridgeServer(options);
 }
 
-main(process.argv.slice(2));
+if (require.main === module) {
+  void main(process.argv.slice(2)).catch((error) => {
+    console.error(errorMessage(error));
+    process.exitCode = 1;
+  });
+}

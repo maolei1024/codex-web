@@ -1,22 +1,12 @@
---- a/webview/assets/app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-C17KDkOa.js
-+++ b/webview/assets/app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-C17KDkOa.js
-@@ -46993,11 +46993,17 @@
-   (n[3] !== e || n[4] !== t
-     ? ((a = [e, t]), (n[3] = e), (n[4] = t), (n[5] = a))
-     : (a = n[5]),
--    wt(`toggle-sidebar`, i, a));
-+    wt(`toggle-sidebar`, i, a),
-+    codexWebShimReact.useEffect(() => {
-+      window.__ELECTRON_SHIM__.closeSidebar = () => {
-+        kl(e, !1);
-+      };
-+    }, [e]));
- }
- var che,
-+  codexWebShimReact,
-   lhe = e(() => {
--    ((che = J()), Ki(), gi(), Pa());
-+    ((che = J()), (codexWebShimReact = t(xc(), 1)), Ki(), gi(), Pa());
-   });
- function uhe(e) {
-   let t = ghe.exec(e);
+--- a/webview/assets/app-initial-236e1501144c.js
++++ b/webview/assets/app-initial-236e1501144c.js
+@@ -366243,6 +366243,9 @@
+       (r[3] = a))
+     : (a = r[3]);
+   let o = a;
++  window.__ELECTRON_SHIM__.closeSidebar = () => {
++    X1n(e, !1, { animate: t });
++  };
+   oU(`toggleSidebar`, o);
+   let s;
+   (r[4] !== i || r[5] !== e || r[6] !== t

@@ -11,6 +11,9 @@ const preloadEntryPath = path.resolve(
   "scratch/asar/.vite/build/preload.js",
 );
 const browserNodeEnv = process.env.NODE_ENV ?? "production";
+const localBuild = JSON.parse(
+  readFileSync(path.join(configDir, "local-build.json"), "utf8"),
+);
 const asarPackageJson = JSON.parse(readFileSync(asarPackagePath, "utf8")) as {
   version?: unknown;
 };
@@ -23,6 +26,7 @@ export default defineConfig({
   root: webviewRoot,
   define: {
     __CODEX_APP_VERSION__: JSON.stringify(asarPackageJson.version),
+    __CODEX_WEB_BUILD_ID__: JSON.stringify(localBuild.id),
     "process.env.NODE_ENV": JSON.stringify(browserNodeEnv),
   },
   server: {

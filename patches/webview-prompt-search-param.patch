@@ -1,119 +1,57 @@
---- a/webview/assets/app-initial~app-main~page-CtX5-cLy.js
-+++ b/webview/assets/app-initial~app-main~page-CtX5-cLy.js
-@@ -510,6 +510,7 @@
-   HG as _n,
-   HH as eee,
-   HM as vn,
-+  HR as useSearchParams,
-   HS as yn,
-   Het as bn,
-   Hg as xn,
-@@ -29098,6 +29099,8 @@
-     g = Ma(),
-     _ = jr(),
-     v = _.state,
-+    [searchParams] = useSearchParams(),
-+    searchParamsPrompt = searchParams.get(`prompt`),
-     { data: y } = Ia(`account-info`, {
-       queryConfig: { enabled: c === `chatgpt` },
-     }),
-@@ -29471,6 +29474,10 @@
-                                             hideRunLocationDropdownOverride:
-                                               !te,
-                                             onLocalConversationCreated: oe,
-+                                            defaultText:
-+                                              searchParamsPrompt ?? void 0,
-+                                            initialPrompt:
-+                                              searchParamsPrompt ?? void 0,
-                                             placeholderText: Me,
-                                           }),
-                                         ],
-@@ -29494,6 +29501,8 @@
-                           (0, lY.jsx)(uC, {
-                             browserConversationId: ae,
-                             composerLayoutMode: `auto-single-line`,
-+                            defaultText: searchParamsPrompt ?? void 0,
-+                            initialPrompt: searchParamsPrompt ?? void 0,
-                             homeRunLocationRemoteProject: ee,
-                             onLocalConversationCreated: oe,
-                             showWorkspaceDropdownInUtilityBar: !1,
---- a/webview/assets/app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-Cdmi2Vi6.js
-+++ b/webview/assets/app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-Cdmi2Vi6.js
-@@ -45773,6 +45773,7 @@
- }
- var Z1 = e(() => {});
- function Q1({
-+  initialPrompt,
-   aboveComposerHeaderContent: e,
-   activeCollaborationMode: t,
-   browserConversationId: n,
-@@ -46315,13 +46316,20 @@
-     Ua = (0, t0.useEffectEvent)(() => {
-       (bn && Ba(bn),
-         Va != null && Ra(Va),
--        _n && _n !== In.getText() && In.setPromptText(_n),
-+        _n && _n !== In.getText()
-+          ? In.setPromptText(_n)
-+          : !_n &&
-+              initialPrompt != null &&
-+              initialPrompt !== `` &&
-+              In.getText() === ``
-+            ? In.setPromptText(initialPrompt)
-+            : null,
-         xn != null && xn.length > 0 && ka(xn),
-         Sn != null && Sn.length > 0 && Ni(Sn));
-     });
-   (0, t0.useEffect)(() => {
-     Ua();
--  }, [_n, bn, xn, Sn, Va]);
-+  }, [_n, bn, xn, Sn, Va, initialPrompt]);
-   let [Wa, Ga] = ef(`composer_prefill`),
-     qa = (0, t0.useEffectEvent)(() => {
-       let e = Wa?.commentAttachments,
-@@ -48823,7 +48831,7 @@
-     ((g0 = X()), za(), (_0 = t(Ya(), 1)), Cs(), wr(), Yo(), (v0 = Z()));
-   });
- function b0(e) {
--  let t = (0, C0.c)(107),
-+  let t = (0, C0.c)(108),
-     {
-       browserConversationId: n,
-       className: r,
-@@ -48843,6 +48851,8 @@
-       hideRunLocationDropdownOverride: v,
-       composerModeAvailability: y,
-       placeholderText: b,
-+      defaultText,
-+      initialPrompt,
-       composerLayoutMode: x,
-       hotkeyWindowHomeFooterControls: S,
-       homeRunLocationRemoteProject: T,
-@@ -48890,7 +48900,7 @@
-     ? (re = t[5])
-     : ((re = Gt(U.value)), (t[4] = U.value), (t[5] = re));
-   let ie = re,
--    J = U.get(C),
-+    J = defaultText ?? U.get(C),
-     ae;
-   t[6] === U ? (ae = t[7]) : ((ae = Pd(U)), (t[6] = U), (t[7] = ae));
-   let oe = ae,
-@@ -49146,8 +49156,10 @@
-   t[90] !== Ke ||
-   t[91] !== qe ||
-   t[92] !== L ||
--  t[93] !== null
-+  t[93] !== null ||
-+  t[107] !== initialPrompt
-     ? ((Je = (0, T0.jsx)(Q1, {
-+        initialPrompt,
-         aboveComposerHeaderContent: Ke,
-         clientThreadId: te,
-         activeCollaborationMode: pe,
-@@ -49211,6 +49223,7 @@
-       (t[91] = qe),
-       (t[92] = L),
-       (t[93] = null),
-+      (t[107] = initialPrompt),
-       (t[94] = Je))
-     : (Je = t[94]);
-   let Xe;
+--- a/webview/assets/app-primary-6b28e06666ff.js
++++ b/webview/assets/app-primary-6b28e06666ff.js
+@@ -402326,7 +402326,8 @@
+       locationState: a,
+       setComments: o,
+     } = e,
+-    s = a?.prefillPrompt,
++    locationSearch = Mc().search,
++    s = a?.prefillPrompt ?? new URLSearchParams(locationSearch).get(`prompt`),
+     c = a?.prefillPriorConversation ?? null,
+     l = a?.prefillAddedFiles ?? null,
+     u = a?.prefillCommentAttachments ?? null,
+@@ -408489,7 +408490,7 @@
+   let A = qw(Wln, k),
+     j = kx(bg);
+   (a.get(pT, j), qw(Vwe, j));
+-  let M = f?.prefillPrompt,
++  let M = f?.prefillPrompt ?? new URLSearchParams(d).get(`prompt`),
+     N = f?.prefillAddedFiles,
+     P = qw(sm, j),
+     F = i === `work` && A.effectiveLocation === `cloud`,
+@@ -412029,7 +412030,9 @@
+     d = kx(tke),
+     f = kx(fde),
+     p = Cg(gb.composerPlainTextMode),
+-    { pathname: m, state: h } = Mc(),
++    { pathname: m, search: searchParamsSearch, state: h } = Mc(),
++    searchParamsPrompt =
++      h?.prefillPrompt ?? new URLSearchParams(searchParamsSearch).get(`prompt`),
+     g;
+   t[1] === m ? (g = t[2]) : ((g = b(m)), (t[1] = m), (t[2] = g));
+   let _ = g,
+@@ -412104,18 +412107,18 @@
+     );
+   }
+   let z;
+-  t[13] !== i || t[14] !== h?.prefillPrompt
+-    ? ((z = h?.prefillPrompt ?? i.get(tw)),
++  t[13] !== i || t[14] !== searchParamsPrompt
++    ? ((z = searchParamsPrompt ?? i.get(tw)),
+       (t[13] = i),
+-      (t[14] = h?.prefillPrompt),
++      (t[14] = searchParamsPrompt),
+       (t[15] = z))
+     : (z = t[15]);
+   let B = z,
+     V;
+-  t[16] !== i || t[17] !== h?.prefillPrompt
+-    ? ((V = h?.prefillPrompt == null ? TLe(i) : void 0),
++  t[16] !== i || t[17] !== searchParamsPrompt
++    ? ((V = searchParamsPrompt == null ? TLe(i) : void 0),
+       (t[16] = i),
+-      (t[17] = h?.prefillPrompt),
++      (t[17] = searchParamsPrompt),
+       (t[18] = V))
+     : (V = t[18]);
+   let H = V,

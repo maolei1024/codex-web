@@ -1,6 +1,6 @@
 --- a/webview/index.html
 +++ b/webview/index.html
-@@ -6,7 +6,10 @@
+@@ -7,7 +7,10 @@
      <!-- PROD_CSP_TAG_HERE -->
      <script type="module" src="./assets/preload.js"></script>
      <meta charset="UTF-8" />
@@ -9,6 +9,6 @@
 +      name="viewport"
 +      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, interactive-widget=resizes-content"
 +    />
-     <title>Codex</title>
+     <title>ChatGPT</title>
      <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
-     <link rel="manifest" href="/manifest.json" crossorigin="use-credentials" />
+     <style>

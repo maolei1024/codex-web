@@ -1,0 +1,13 @@
+--- a/webview/assets/app-initial-236e1501144c.js
++++ b/webview/assets/app-initial-236e1501144c.js
+@@ -179756,6 +179756,9 @@
+     function r(e, r, i = null) {
+       return (0, n.useStatsigInternalClientFactoryAsync)(
+-        (e) => new t.StatsigClient(e.sdkKey, e.initialUser, e.statsigOptions),
++        (e) => window.__ELECTRON_SHIM__.configureStatsigClient(
++          new t.StatsigClient(e.sdkKey, e.initialUser, e.statsigOptions),
++          e.sdkKey,
++        ),
+         { sdkKey: e, initialUser: r, statsigOptions: i },
+       );
+     }

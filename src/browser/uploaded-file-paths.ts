@@ -12,10 +12,10 @@ export function rememberUploadedFilePaths(
   for (let index = 0; index < files.length; index += 1) {
     const file = files[index];
     const uploadedFile = uploadedFiles[index];
-    const path = getUploadedPath(uploadedFile);
+    const uploadedPath = getUploadedPath(uploadedFile);
 
-    if (file && path) {
-      uploadedFilePaths.set(file, path);
+    if (file && uploadedPath) {
+      uploadedFilePaths.set(file, uploadedPath);
     }
   }
 }

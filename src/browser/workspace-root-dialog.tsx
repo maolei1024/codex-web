@@ -516,10 +516,6 @@ function WorkspaceRootDialog({
   );
 }
 
-// Interactions inside this dialog must not reach document-level listeners:
-// the 26.623 Create-project modal is a dismissable layer that closes itself
-// on any pointerdown/focusin outside its own DOM, which would unmount the
-// subscriber for our synthesized workspace-root-option-picked reply.
 const SHIELDED_EVENTS = [
   "pointerdown",
   "pointerup",
@@ -540,9 +536,7 @@ function ensureHost(): HTMLElement {
     element = document.createElement("div");
     element.id = DIALOG_ID;
     for (const eventName of SHIELDED_EVENTS) {
-      element.addEventListener(eventName, (event) => {
-        event.stopPropagation();
-      });
+      element.addEventListener(eventName, (event) => event.stopPropagation());
     }
     document.body.append(element);
   }

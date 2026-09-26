@@ -1,14 +1,5 @@
 import path from "node:path";
 
-// The codex app-server rejects any request in which a field typed
-// `AbsolutePathBuf` holds a non-absolute path ("Invalid request:
-// AbsolutePathBuf deserialized without a base path"). The upstream webview
-// intermittently leaks its `~` home-directory sentinel (and can leak
-// client-platform paths) into `thread/start` / `thread/resume` payloads —
-// most visibly as "恢复对话失败" when reopening a thread. The desktop app has
-// the same class of bug upstream (openai/codex#16815, #23209); rather than
-// patching every leak site in the bundle, normalize the known
-// `AbsolutePathBuf`-typed fields as requests transit the websocket bridge.
 const ABSOLUTE_PATH_ARRAY_KEYS = new Set([
   "runtimeWorkspaceRoots",
   "writableRoots",
@@ -72,9 +63,6 @@ function sanitizeNode(
         }
         sanitized.push(result.value);
       }
-      // A garbage override should degrade to "no override", not to an
-      // override that actively clears the thread's roots. writableRoots is a
-      // struct field and must stay present (possibly empty) instead.
       if (
         key === "runtimeWorkspaceRoots" &&
         sanitized.length === 0 &&
@@ -113,28 +101,17 @@ type McpRequestEnvelope = {
   };
 };
 
-/**
- * Rewrites, in place, non-absolute paths inside an outbound bridge envelope
- * that carries a JSON-RPC request. Matched by shape rather than by envelope
- * type: the shell accepts several request-carrying types (`mcp-request`,
- * `thread-prewarm-start`, `mcp-notification`, ...) and a prewarm thread/start
- * fails on dirty paths just like a regular request does. Returns the changes
- * made (null when the argument is not a request envelope or already clean)
- * so callers can log them.
- */
-export function sanitizeMcpRequestPaths(
-  argument: unknown,
-  homeDir: string,
-): { method: string; changes: SanitizedPathChange[] } | null {
-  if (typeof argument !== "object" || argument === null) {
+function requestFromEnvelope(node: unknown): {
+  method: string;
+  params: Record<string, unknown>;
+} | null {
+  if (typeof node !== "object" || node === null) {
     return null;
   }
-  const envelope = argument as McpRequestEnvelope;
-  if (typeof envelope.type !== "string") {
-    return null;
-  }
+  const envelope = node as McpRequestEnvelope;
   const request = envelope.request;
   if (
+    typeof envelope.type !== "string" ||
     typeof request !== "object" ||
     request === null ||
     typeof request.method !== "string" ||
@@ -143,8 +120,50 @@ export function sanitizeMcpRequestPaths(
   ) {
     return null;
   }
+  return {
+    method: request.method,
+    params: request.params as Record<string, unknown>,
+  };
+}
+
+export function sanitizeMcpRequestPaths(
+  argument: unknown,
+  homeDir: string,
+): { method: string; changes: SanitizedPathChange[] } | null {
+  if (typeof argument !== "object" || argument === null) {
+    return null;
+  }
 
   const changes: SanitizedPathChange[] = [];
-  sanitizeNode(request.params, homeDir, changes);
-  return changes.length > 0 ? { method: request.method, changes } : null;
+  let firstMethod: string | null = null;
+  const seen = new WeakSet<object>();
+
+  const visit = (node: unknown): void => {
+    if (typeof node !== "object" || node === null || seen.has(node)) {
+      return;
+    }
+    seen.add(node);
+
+    const request = requestFromEnvelope(node);
+    if (request) {
+      firstMethod ??= request.method;
+      sanitizeNode(request.params, homeDir, changes);
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        visit(item);
+      }
+      return;
+    }
+    for (const value of Object.values(node as Record<string, unknown>)) {
+      visit(value);
+    }
+  };
+
+  visit(argument);
+  return changes.length > 0 && firstMethod !== null
+    ? { method: firstMethod, changes }
+    : null;
 }

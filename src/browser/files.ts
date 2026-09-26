@@ -28,7 +28,6 @@ type UploadedFile = {
 
 const replayedFileEvent = Symbol("codex-web-replayed-file-event");
 let fileUploadBridgeInstalled = false;
-
 const UPLOAD_ATTEMPTS = 2;
 const UPLOAD_RETRY_DELAY_MS = 1_000;
 
@@ -116,8 +115,6 @@ async function uploadFiles(files: readonly File[]): Promise<UploadedFile[]> {
     formData.append("files", file, file.name || "upload");
   }
 
-  // Retry only network-level failures; HTTP error statuses (401, 413, 500)
-  // are deliberate server answers and are never retried.
   let lastError: unknown = new Error("upload failed");
   for (let attempt = 0; attempt < UPLOAD_ATTEMPTS; attempt += 1) {
     if (attempt > 0) {
@@ -151,7 +148,6 @@ export function installBrowserFileUploadBridge(): void {
   if (fileUploadBridgeInstalled || typeof window === "undefined") {
     return;
   }
-
   if (typeof DataTransfer !== "function") {
     return;
   }
@@ -204,11 +200,7 @@ function interceptFileEvent(
   dataTransfer: DataTransfer | null,
   createReplayEvent: (dataTransfer: DataTransfer) => ClipboardEvent | DragEvent,
 ): void {
-  if (isReplayedFileEvent(event)) {
-    return;
-  }
-
-  if (!shouldHandleFileEventTarget(event.target)) {
+  if (isReplayedFileEvent(event) || !shouldHandleFileEventTarget(event.target)) {
     return;
   }
 
@@ -216,14 +208,12 @@ function interceptFileEvent(
   const filesToUpload = files.filter(
     (file) => getUploadedFilePath(file) == null,
   );
-
   if (filesToUpload.length === 0) {
     return;
   }
 
   event.preventDefault();
   event.stopImmediatePropagation();
-
   const target = event.target;
   if (!(target instanceof EventTarget)) {
     return;
@@ -232,7 +222,6 @@ function interceptFileEvent(
   void (async () => {
     const uploadedFiles = await uploadFiles(filesToUpload);
     rememberUploadedFilePaths(filesToUpload, uploadedFiles);
-
     const replayDataTransfer = cloneDataTransfer(dataTransfer, files);
     target.dispatchEvent(markAsReplayed(createReplayEvent(replayDataTransfer)));
   })().catch((error) => {
@@ -244,11 +233,9 @@ function filesFromDataTransfer(dataTransfer: DataTransfer | null): File[] {
   if (!dataTransfer) {
     return [];
   }
-
   if (dataTransfer.files.length > 0) {
     return Array.from(dataTransfer.files);
   }
-
   return Array.from(dataTransfer.items ?? [])
     .filter((item) => item.kind === "file")
     .map((item) => item.getAsFile())
@@ -260,24 +247,20 @@ function cloneDataTransfer(
   files: readonly File[],
 ): DataTransfer {
   const clone = new DataTransfer();
-
   for (const file of files) {
     clone.items.add(file);
   }
-
   if (source) {
     for (const type of Array.from(source.types)) {
       if (type === "Files") {
         continue;
       }
-
       const value = source.getData(type);
       if (value) {
         clone.setData(type, value);
       }
     }
   }
-
   return clone;
 }
 
@@ -289,9 +272,7 @@ function isReplayedFileEvent(event: Event): boolean {
 }
 
 function markAsReplayed<T extends Event>(event: T): T {
-  Object.defineProperty(event, replayedFileEvent, {
-    value: true,
-  });
+  Object.defineProperty(event, replayedFileEvent, { value: true });
   return event;
 }
 

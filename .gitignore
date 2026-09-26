@@ -1,4 +1,20 @@
 node_modules/
 scratch*/
 sentry
-.claude/settings.local.json
+
+# Generated server output and local runtime state.
+src/server/**/*.js
+src/server/**/*.d.ts
+src/server/**/*.map
+statsig-state.json*
+artifact-sessions/
+LOCAL_RELEASE.md
+*.log
+__pycache__/
+
+# Projects, uploads and credentials belong outside the source checkout.
+ChatGPT/
+uploads/
+.env
+.env.*
+!.env.example

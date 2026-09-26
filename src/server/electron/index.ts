@@ -1,10 +1,20 @@
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+
 type StubFunction = (...args: unknown[]) => unknown;
 type StubListener = (...args: unknown[]) => void;
+type StubMessagePort = {
+  close: () => void;
+  on: (event: string, listener: StubListener) => unknown;
+  postMessage: (message: unknown) => void;
+  start: () => void;
+};
 type StubWebContents = {
   id: number;
   mainFrame: {
     url: string;
   };
+  getURL: () => string;
   isDestroyed: () => boolean;
   off: (event: string, listener: StubListener) => unknown;
   on: (event: string, listener: StubListener) => unknown;
@@ -20,41 +30,32 @@ type IpcMainEvent = {
   senderFrame: {
     url: string;
   };
-  ports: unknown[];
+  ports: StubMessagePort[];
   reply: (channel: string, ...args: unknown[]) => void;
 };
 
 type IpcMainBridgeState = {
-  broadcastToRenderer?: (
-    message:
-      | {
-          type: "ipc-main-event";
-          channel: string;
-          args: unknown[];
-        }
-      | {
-          type: "app-host-port-message";
-          portId: string;
-          data: unknown;
-        }
-      | {
-          type: "app-host-port-close";
-          portId: string;
-        },
-  ) => void;
+  broadcastToRenderer?: (message: {
+    type: "ipc-main-event";
+    channel: string;
+    args: unknown[];
+  }) => void;
   handleRendererInvoke?: (
     channel: string,
     args: unknown[],
     sourceUrl?: string,
   ) => Promise<unknown>;
+  handleRendererPostMessage?: (
+    channel: string,
+    message: unknown,
+    ports: StubMessagePort[],
+    sourceUrl?: string,
+  ) => void;
   handleRendererSend?: (
     channel: string,
     args: unknown[],
     sourceUrl?: string,
   ) => void;
-  handleRendererPortConnect?: (portId: string, channel: string) => void;
-  handleRendererPortMessage?: (portId: string, data: unknown) => void;
-  handleRendererPortClose?: (portId: string) => void;
 };
 
 function getIpcMainBridgeState(): IpcMainBridgeState {
@@ -176,6 +177,7 @@ const rendererWebContentsEmitter = createEmitterStub("ipcMainEvent.sender");
 const rendererWebContents: StubWebContents = {
   id: 1001,
   mainFrame: rendererMainFrame,
+  getURL: () => rendererMainFrame.url,
   isDestroyed: () => false,
   off: rendererWebContentsEmitter.off,
   on: rendererWebContentsEmitter.on,
@@ -190,14 +192,18 @@ const rendererWebContents: StubWebContents = {
   },
 };
 
-function createIpcMainEvent(): IpcMainEvent {
+function createIpcMainEvent(ports: StubMessagePort[] = []): IpcMainEvent {
+  const sender =
+    (BrowserWindow.fromWebContents(rendererWebContents)
+      ?.webContents as unknown as StubWebContents | undefined) ??
+    rendererWebContents;
   const event: IpcMainEvent = {
     returnValue: undefined,
     processId: 1,
     frameId: 1,
-    sender: rendererWebContents,
-    senderFrame: rendererMainFrame,
-    ports: [],
+    sender,
+    senderFrame: sender.mainFrame,
+    ports,
     reply: (channel: string, ...args: unknown[]): void => {
       getIpcMainBridgeState().broadcastToRenderer?.({
         type: "ipc-main-event",
@@ -208,50 +214,6 @@ function createIpcMainEvent(): IpcMainEvent {
   };
 
   return event;
-}
-
-// Fake Electron MessagePortMain bridged over the WebSocket. The upstream
-// app-host wiring only uses start/on(message|close)/postMessage/close.
-type BridgedPortMain = {
-  on: (event: string, listener: StubListener) => unknown;
-  once: (event: string, listener: StubListener) => unknown;
-  off: (event: string, listener: StubListener) => unknown;
-  removeListener: (event: string, listener: StubListener) => unknown;
-  start: () => void;
-  postMessage: (data: unknown) => void;
-  close: () => void;
-  emitMessage: (data: unknown) => void;
-  emitClose: () => void;
-};
-
-function createBridgedPortMain(portId: string): BridgedPortMain {
-  const emitter = createEmitterStub(`BridgedPortMain#${portId}`);
-  return {
-    on: emitter.on,
-    once: emitter.once,
-    off: emitter.off,
-    removeListener: emitter.removeListener,
-    start(): void {},
-    postMessage(data: unknown): void {
-      getIpcMainBridgeState().broadcastToRenderer?.({
-        type: "app-host-port-message",
-        portId,
-        data,
-      });
-    },
-    close(): void {
-      getIpcMainBridgeState().broadcastToRenderer?.({
-        type: "app-host-port-close",
-        portId,
-      });
-    },
-    emitMessage(data: unknown): void {
-      emitter.emit("message", { data, ports: [] });
-    },
-    emitClose(): void {
-      emitter.emit("close");
-    },
-  };
 }
 
 function createIpcMainStub(): {
@@ -269,6 +231,26 @@ function createIpcMainStub(): {
     (event: unknown, ...args: unknown[]) => unknown
   >();
   const bridgeState = getIpcMainBridgeState();
+
+  const pendingPostMessages = new Map<
+    string,
+    Array<{ message: unknown; ports: StubMessagePort[] }>
+  >();
+  const registeredPostMessageChannels = new Set<string>();
+
+  bridgeState.handleRendererPostMessage = (
+    channel: string,
+    message: unknown,
+    ports: StubMessagePort[],
+  ): void => {
+    if (registeredPostMessageChannels.has(channel)) {
+      emitter.emit(channel, createIpcMainEvent(ports), message);
+      return;
+    }
+    const pending = pendingPostMessages.get(channel) ?? [];
+    pending.push({ message, ports });
+    pendingPostMessages.set(channel, pending);
+  };
 
   bridgeState.handleRendererInvoke = async (
     channel: string,
@@ -291,35 +273,19 @@ function createIpcMainStub(): {
     emitter.emit(channel, event, ...args);
   };
 
-  const bridgedPorts = new Map<string, BridgedPortMain>();
-
-  bridgeState.handleRendererPortConnect = (
-    portId: string,
-    channel: string,
-  ): void => {
-    log("ipcMain.portConnect", [portId, channel]);
-    const port = createBridgedPortMain(portId);
-    bridgedPorts.set(portId, port);
-    const event = createIpcMainEvent();
-    event.ports = [port];
-    emitter.emit(channel, event);
-  };
-
-  bridgeState.handleRendererPortMessage = (
-    portId: string,
-    data: unknown,
-  ): void => {
-    bridgedPorts.get(portId)?.emitMessage(data);
-  };
-
-  bridgeState.handleRendererPortClose = (portId: string): void => {
-    const port = bridgedPorts.get(portId);
-    bridgedPorts.delete(portId);
-    port?.emitClose();
-  };
-
   return {
-    on: emitter.on,
+    on(channel: string, listener: StubListener): unknown {
+      const result = emitter.on(channel, listener);
+      registeredPostMessageChannels.add(channel);
+      const pending = pendingPostMessages.get(channel);
+      if (pending) {
+        pendingPostMessages.delete(channel);
+        for (const { message, ports } of pending) {
+          emitter.emit(channel, createIpcMainEvent(ports), message);
+        }
+      }
+      return result;
+    },
     off: emitter.off,
     handle(
       channel: string,
@@ -336,6 +302,8 @@ function createIpcMainStub(): {
 }
 
 let appReady = false;
+const commandLineSwitches = new Map<string, string>();
+const commandLineArguments: string[] = [];
 
 const appBase = {
   ...createEmitterStub("app"),
@@ -346,11 +314,28 @@ const appBase = {
     return "Codex";
   },
   getVersion(): string {
-    log("app.getVersion", []);
-    return "26.409.20454";
+    return globalThis.__CODEX_SHIM_VALUES__.version;
+  },
+  getLocale(): string {
+    log("app.getLocale", []);
+    return "en-US";
+  },
+  getSystemLocale(): string {
+    log("app.getSystemLocale", []);
+    return "en-US";
+  },
+  getPreferredSystemLanguages(): string[] {
+    log("app.getPreferredSystemLanguages", []);
+    return ["en-US"];
   },
   getPath(name: string): string {
     log("app.getPath", [name]);
+    if (name === "home") {
+      return homedir();
+    }
+    if (name === "documents") {
+      return resolve(process.env.CODEX_WEB_DOCUMENTS_DIR || homedir());
+    }
     return process.cwd();
   },
   getAppMetrics(): unknown[] {
@@ -390,20 +375,23 @@ const appBase = {
   commandLine: {
     appendSwitch(name: string, value?: string): void {
       log("app.commandLine.appendSwitch", [name, value]);
+      commandLineSwitches.set(name, value ?? "");
     },
     appendArgument(value: string): void {
       log("app.commandLine.appendArgument", [value]);
-    },
-    hasSwitch(name: string): boolean {
-      log("app.commandLine.hasSwitch", [name]);
-      return false;
+      commandLineArguments.push(value);
     },
     getSwitchValue(name: string): string {
       log("app.commandLine.getSwitchValue", [name]);
-      return "";
+      return commandLineSwitches.get(name) ?? "";
+    },
+    hasSwitch(name: string): boolean {
+      log("app.commandLine.hasSwitch", [name]);
+      return commandLineSwitches.has(name);
     },
     removeSwitch(name: string): void {
       log("app.commandLine.removeSwitch", [name]);
+      commandLineSwitches.delete(name);
     },
   },
   on(event: string, listener: (...args: unknown[]) => void): unknown {
@@ -433,11 +421,26 @@ const app = new Proxy(appBase as Record<string, unknown>, {
 }) as typeof appBase;
 
 class BrowserWindow {
+  static isInputShapeSupported(): boolean {
+    return false;
+  }
+
+  static isSystemBackdropSupported(): boolean {
+    return false;
+  }
+
+  static fromId(id: number): BrowserWindow | null {
+    return (
+      BrowserWindow.getAllWindows().find((window) => window.id === id) ?? null
+    );
+  }
+
   static nextId = 1;
   static allWindows: BrowserWindow[] = [];
   static focusedWindow: BrowserWindow | null = null;
   id: number;
   private destroyed = false;
+  private visible = true;
   private title = "Codex";
   private bounds = { x: 0, y: 0, width: 1280, height: 820 };
   webContents: Record<string, unknown>;
@@ -445,6 +448,7 @@ class BrowserWindow {
 
   constructor(...args: unknown[]) {
     log("new BrowserWindow", args);
+    this.visible = (args[0] as { show?: boolean } | undefined)?.show !== false;
     this.id = BrowserWindow.nextId++;
     this.emitter = createEmitterStub(`BrowserWindow#${this.id}`);
 
@@ -455,8 +459,20 @@ class BrowserWindow {
       {
         ...webContentsEmitter,
         id: this.id * 1000 + 1,
+        mainFrame: {
+          url: "",
+        },
+        getURL: (): string => {
+          log(`BrowserWindow#${this.id}.webContents.getURL`, []);
+          return String(
+            (this.webContents.mainFrame as { url?: string } | undefined)?.url ??
+              "",
+          );
+        },
+        isDestroyed: (): boolean => this.destroyed,
         loadURL: async (url: string): Promise<void> => {
           log(`BrowserWindow#${this.id}.webContents.loadURL`, [url]);
+          (this.webContents.mainFrame as { url: string }).url = url;
         },
         loadFile: async (...loadFileArgs: unknown[]): Promise<void> => {
           log(`BrowserWindow#${this.id}.webContents.loadFile`, loadFileArgs);
@@ -472,16 +488,14 @@ class BrowserWindow {
           if (sendArgs.length === 0 || typeof sendArgs[0] !== "string") {
             return;
           }
-          // Only the primary (first live) window has a renderer in the web
-          // deployment: every browser tab plays the role of that window's
-          // webview. Upstream registers secondary shell windows (hotkey
-          // overlay, dictation, debug) as app-server listeners too, so each
-          // broadcast notification is sent once per window — forwarding all
-          // of them would deliver duplicate stream deltas to every tab.
-          const primary = BrowserWindow.allWindows.find(
+          // Browser tabs represent the primary live Electron window. The
+          // desktop bundle also creates secondary shell windows and registers
+          // them for app-server notifications; forwarding every window would
+          // duplicate streaming deltas in every tab.
+          const primaryWindow = BrowserWindow.allWindows.find(
             (window) => !window.destroyed,
           );
-          if (primary !== this) {
+          if (primaryWindow?.id !== this.id) {
             return;
           }
           const [channel, ...args] = sendArgs as [string, ...unknown[]];
@@ -494,6 +508,10 @@ class BrowserWindow {
       } as Record<string, unknown>,
       {
         get: (target, prop) => {
+          // Async Electron APIs can return this proxy; it must not be thenable.
+          if (prop === "then") {
+            return undefined;
+          }
           if (prop in target) {
             return target[prop as keyof typeof target];
           }
@@ -504,16 +522,20 @@ class BrowserWindow {
       },
     );
 
-    BrowserWindow.allWindows.push(this);
-    BrowserWindow.focusedWindow = this;
-    return new Proxy(this, {
+    const window = new Proxy(this, {
       get: (target, prop) => {
+        if (prop === "then") {
+          return undefined;
+        }
         if (prop in target) {
           return target[prop as keyof typeof target];
         }
         return createDeepStub(`BrowserWindow#${target.id}.${String(prop)}`);
       },
     });
+    BrowserWindow.allWindows.push(window);
+    BrowserWindow.focusedWindow = window;
+    return window;
   }
 
   static getAllWindows(): BrowserWindow[] {
@@ -521,27 +543,29 @@ class BrowserWindow {
     return BrowserWindow.allWindows.filter((window) => !window.destroyed);
   }
 
-  static fromWebContents(webContents: unknown): BrowserWindow | null {
-    log("BrowserWindow.fromWebContents", []);
-    return (
-      BrowserWindow.allWindows.find(
-        (window) => !window.destroyed && window.webContents === webContents,
-      ) ??
-      BrowserWindow.getFocusedWindow() ??
-      BrowserWindow.getAllWindows()[0] ??
-      null
-    );
-  }
-
   static getFocusedWindow(): BrowserWindow | null {
     log("BrowserWindow.getFocusedWindow", []);
-    if (
-      BrowserWindow.focusedWindow &&
-      !BrowserWindow.focusedWindow.destroyed
-    ) {
+    if (BrowserWindow.focusedWindow && !BrowserWindow.focusedWindow.destroyed) {
       return BrowserWindow.focusedWindow;
     }
     return BrowserWindow.getAllWindows()[0] ?? null;
+  }
+
+  static fromWebContents(
+    webContents: { id?: unknown } | null | undefined,
+  ): BrowserWindow | null {
+    log("BrowserWindow.fromWebContents", [webContents]);
+    if (!webContents) {
+      return null;
+    }
+
+    return (
+      BrowserWindow.getAllWindows().find(
+        (window) =>
+          window.webContents === webContents ||
+          window.webContents.id === webContents.id,
+      ) ?? null
+    );
   }
 
   on(event: string, listener: StubListener): unknown {
@@ -558,6 +582,11 @@ class BrowserWindow {
 
   removeListener(event: string, listener: StubListener): unknown {
     return this.emitter.removeListener(event, listener);
+  }
+
+  async loadURL(url: string): Promise<void> {
+    log(`BrowserWindow#${this.id}.loadURL`, [url]);
+    (this.webContents.mainFrame as { url: string }).url = url;
   }
 
   close(): void {
@@ -580,6 +609,15 @@ class BrowserWindow {
   isDestroyed(): boolean {
     log(`BrowserWindow#${this.id}.isDestroyed`, []);
     return this.destroyed;
+  }
+
+  isFocused(): boolean {
+    log(`BrowserWindow#${this.id}.isFocused`, []);
+    return BrowserWindow.focusedWindow === this && !this.destroyed;
+  }
+
+  isVisible(): boolean {
+    return this.visible && !this.destroyed;
   }
 
   removeMenu(): void {
@@ -618,10 +656,12 @@ class BrowserWindow {
 
   show(): void {
     log(`BrowserWindow#${this.id}.show`, []);
+    this.visible = true;
   }
 
   hide(): void {
     log(`BrowserWindow#${this.id}.hide`, []);
+    this.visible = false;
   }
 
   focus(): void {
@@ -823,7 +863,44 @@ const nativeImage = {
     };
   },
 };
-const powerMonitor = createEmitterStub("powerMonitor");
+const powerMonitor = {
+  ...createEmitterStub("powerMonitor"),
+  getSystemIdleState(_idleThreshold: number): string {
+    return "unknown";
+  },
+  getSystemIdleTime(): number {
+    return 0;
+  },
+  isOnBatteryPower(): boolean {
+    return false;
+  },
+};
+// Desktop shortcuts and sleep inhibitors have no native window in the web host.
+const globalShortcut = {
+  register(...args: unknown[]): boolean {
+    log("globalShortcut.register", args);
+    return false;
+  },
+  isRegistered(_accelerator: string): boolean {
+    return false;
+  },
+  unregister(...args: unknown[]): void {
+    log("globalShortcut.unregister", args);
+  },
+  unregisterAll(): void {},
+};
+const powerSaveBlocker = {
+  start(type: string): number {
+    log("powerSaveBlocker.start", [type]);
+    return 0;
+  },
+  stop(id: number): void {
+    log("powerSaveBlocker.stop", [id]);
+  },
+  isStarted(_id: number): boolean {
+    return false;
+  },
+};
 const screen = {
   ...createEmitterStub("screen"),
   getAllDisplays(): Array<{
@@ -879,7 +956,13 @@ const protocol = {
   },
 };
 function createSessionStub(label: string): {
+  cookies: ReturnType<typeof createEmitterStub> & {
+    get: (...args: unknown[]) => Promise<unknown[]>;
+    remove: (...args: unknown[]) => Promise<void>;
+    set: (...args: unknown[]) => Promise<void>;
+  };
   getUserAgent: () => string;
+  getDownloadHistory: () => Promise<unknown[]>;
   loadExtension: (extensionPath: string) => Promise<{
     id: string;
     name: string;
@@ -893,6 +976,7 @@ function createSessionStub(label: string): {
   removeListener: (event: string, listener: StubListener) => unknown;
   setPermissionCheckHandler: (...args: unknown[]) => void;
   setPermissionRequestHandler: (...args: unknown[]) => void;
+  setPreferredLanguages: (languages: string[]) => void;
   webRequest: {
     onBeforeRequest: (...args: unknown[]) => void;
     onBeforeSendHeaders: (...args: unknown[]) => void;
@@ -900,6 +984,22 @@ function createSessionStub(label: string): {
 } {
   const emitter = createEmitterStub(label);
   return {
+    cookies: {
+      ...createEmitterStub(`${label}.cookies`),
+      async get(...args: unknown[]): Promise<unknown[]> {
+        log(`${label}.cookies.get`, args);
+        return [];
+      },
+      async remove(...args: unknown[]): Promise<void> {
+        log(`${label}.cookies.remove`, args);
+      },
+      async set(...args: unknown[]): Promise<void> {
+        log(`${label}.cookies.set`, args);
+      },
+    },
+    async getDownloadHistory(): Promise<unknown[]> {
+      return [];
+    },
     async loadExtension(extensionPath: string): Promise<{
       id: string;
       name: string;
@@ -929,6 +1029,9 @@ function createSessionStub(label: string): {
     setPermissionRequestHandler(...args: unknown[]): void {
       log(`${label}.setPermissionRequestHandler`, args);
     },
+    setPreferredLanguages(languages: string[]): void {
+      log(`${label}.setPreferredLanguages`, [languages]);
+    },
     webRequest: {
       onBeforeRequest(...args: unknown[]): void {
         log(`${label}.webRequest.onBeforeRequest`, args);
@@ -939,14 +1042,19 @@ function createSessionStub(label: string): {
     },
   };
 }
-const partitionSessions = new Map<string, ReturnType<typeof createSessionStub>>();
+const partitionSessions = new Map<
+  string,
+  ReturnType<typeof createSessionStub>
+>();
 const session = {
   defaultSession: createSessionStub("session.defaultSession"),
   fromPartition(partition: string): ReturnType<typeof createSessionStub> {
     log("session.fromPartition", [partition]);
     let partitionSession = partitionSessions.get(partition);
     if (!partitionSession) {
-      partitionSession = createSessionStub(`session.fromPartition(${partition})`);
+      partitionSession = createSessionStub(
+        `session.fromPartition(${partition})`,
+      );
       partitionSessions.set(partition, partitionSession);
     }
     return partitionSession;
@@ -956,17 +1064,19 @@ const utilityProcess = {
   fork: undefined,
 };
 const webContents = {
-  fromId(id: number): undefined {
+  fromId(id: number): Record<string, unknown> | undefined {
     log("webContents.fromId", [id]);
-    return undefined;
+    return BrowserWindow.getAllWindows().find(
+      (window) => window.webContents.id === id,
+    )?.webContents;
   },
-  getFocusedWebContents(): null {
-    log("webContents.getFocusedWebContents", []);
-    return null;
-  },
-  getAllWebContents(): unknown[] {
+  getAllWebContents(): Record<string, unknown>[] {
     log("webContents.getAllWebContents", []);
-    return [];
+    return BrowserWindow.getAllWindows().map((window) => window.webContents);
+  },
+  getFocusedWebContents(): Record<string, unknown> | null {
+    log("webContents.getFocusedWebContents", []);
+    return BrowserWindow.getFocusedWindow()?.webContents ?? null;
   },
 };
 class MessageChannelMain {
@@ -989,6 +1099,8 @@ const electronModule = new Proxy(
     nativeTheme,
     Notification,
     powerMonitor,
+    powerSaveBlocker,
+    globalShortcut,
     protocol,
     screen,
     session,
@@ -1022,6 +1134,8 @@ export {
   nativeTheme,
   Notification,
   powerMonitor,
+  powerSaveBlocker,
+  globalShortcut,
   protocol,
   screen,
   session,

@@ -4,6 +4,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 export const AUTH_COOKIE_NAME = "codex_web_token";
 
 const AUTH_COOKIE_MAX_AGE_SECONDS = 31_536_000;
+const ENCODED_OCTET = /%[0-9a-f]{2}/i;
+const INVALID_PERCENT_ENCODING = /%(?![0-9a-f]{2})/i;
+const UNSAFE_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
 
 const UNAUTHORIZED_HTML = `<!doctype html>
 <html>
@@ -141,16 +144,65 @@ export function isAuthorizedRequest(
   );
 }
 
+export function isSafeRequestTarget(rawUrl: string): boolean {
+  let pathname = rawUrl.split("?", 1)[0] ?? "";
+  if (
+    !pathname.startsWith("/") ||
+    pathname.startsWith("//") ||
+    INVALID_PERCENT_ENCODING.test(pathname) ||
+    UNSAFE_PATH_CHARACTER.test(pathname)
+  ) {
+    return false;
+  }
+
+  let pass = 0;
+  while (ENCODED_OCTET.test(pathname) && pass < 8) {
+    try {
+      pathname = decodeURIComponent(pathname);
+    } catch {
+      return false;
+    }
+    if (
+      pathname.startsWith("//") ||
+      INVALID_PERCENT_ENCODING.test(pathname) ||
+      UNSAFE_PATH_CHARACTER.test(pathname)
+    ) {
+      return false;
+    }
+    pass += 1;
+  }
+  if (ENCODED_OCTET.test(pathname)) {
+    return false;
+  }
+
+  return !pathname
+    .split("/")
+    .some((segment) => segment === "." || segment === "..");
+}
+
+function unauthorized(reply: FastifyReply, backend: boolean): FastifyReply {
+  reply.header("cache-control", "no-store");
+  if (backend) {
+    return reply.code(401).send({ error: "unauthorized" });
+  }
+  return reply.code(401).type("text/html").send(UNAUTHORIZED_HTML);
+}
+
 export function installAuthHook(
   app: FastifyInstance,
   expectedToken: string,
 ): void {
-  // Auth relies on every route being registered on this instance after this
-  // hook is installed; a second Fastify instance or raw http route would
-  // bypass it.
+  // Every HTTP route must be registered on this instance after this hook.
+  // Raw websocket upgrades are authenticated separately in main.ts.
   app.addHook(
     "onRequest",
     async (request: FastifyRequest, reply: FastifyReply) => {
+      const rawUrl = request.raw.url ?? request.url;
+      if (!isSafeRequestTarget(rawUrl)) {
+        reply.header("cache-control", "no-store");
+        return reply.code(400).send({ error: "invalid request path" });
+      }
+
       const cookieToken = getCookieValue(
         request.headers.cookie,
         AUTH_COOKIE_NAME,
@@ -169,23 +221,14 @@ export function installAuthHook(
         url.searchParams.delete("token");
         const secure = requestIsSecure(
           request.headers["x-forwarded-proto"],
-          Boolean(
-            (request.raw.socket as { encrypted?: boolean }).encrypted,
-          ),
+          Boolean((request.raw.socket as { encrypted?: boolean }).encrypted),
         );
+        reply.header("cache-control", "no-store");
         reply.header("set-cookie", buildAuthCookie(expectedToken, secure));
         return reply.redirect(url.pathname + url.search, 302);
       }
 
-      if (request.url.startsWith("/__backend/")) {
-        return reply.code(401).send({ error: "unauthorized" });
-      }
-
-      if (request.method === "GET" || request.method === "HEAD") {
-        return reply.code(401).type("text/html").send(UNAUTHORIZED_HTML);
-      }
-
-      return reply.code(401).send({ error: "unauthorized" });
+      return unauthorized(reply, request.url.startsWith("/__backend/"));
     },
   );
 }
