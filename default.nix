@@ -16,10 +16,17 @@ flake-utils.lib.eachSystem systems (
   system:
   let
     pkgs = import nixpkgs { inherit system; };
+<<<<<<< HEAD
     appVersion = "26.707.31428";
     codexZip = pkgs.fetchurl {
       url = "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-${appVersion}.zip";
       hash = "sha256-/9w1GlBxBdVddGTjNAMCx1i4pUuSZxHEsVvzc8y0fWQ=";
+=======
+    appVersion = "26.901.41123";
+    codexZip = pkgs.fetchurl {
+      url = "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-${appVersion}.zip";
+      hash = "sha256-8Nb8q26xxmrE+FhbxbVpJrLYdwDHt8wRRCnntUAZP9Y=";
+>>>>>>> main
     };
     codex = self.packages.${system}.codex;
   in
@@ -123,7 +130,7 @@ flake-utils.lib.eachSystem systems (
             '
 
             # Keep only extracted asar artifacts for packaging.
-            rm -rf scratch/Codex.app
+            rm -rf scratch/ChatGPT.app
 
             # npm pack drops directories named node_modules, so rename the nested
             # asar tree in-place to keep it in the package output.

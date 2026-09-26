@@ -1,5 +1,12 @@
 #!/usr/bin/env node
 
+declare global {
+  var __CODEX_SHIM_VALUES__: {
+    version: string;
+  };
+}
+
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -47,6 +54,22 @@ type RendererToMainMessage =
       channel: string;
       args: unknown[];
       sourceUrl: string;
+    }
+  | {
+      type: "ipc-renderer-post-message";
+      channel: string;
+      message: unknown;
+      portIds: string[];
+      sourceUrl?: string;
+    }
+  | {
+      type: "message-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "message-port-close";
+      portId: string;
     }
   | {
       type: "workspace-directory-entries-request";
@@ -110,6 +133,15 @@ type MainToRendererMessage =
       requestId: string;
       ok: false;
       errorMessage: string;
+    }
+  | {
+      type: "message-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "message-port-close";
+      portId: string;
     };
 
 type WorkspaceDirectoryEntry = {
@@ -123,6 +155,92 @@ type WorkspaceDirectoryEntries = {
   parentPath: string | null;
   entries: WorkspaceDirectoryEntry[];
 };
+
+type MessagePortListener = (...args: unknown[]) => void;
+
+type BridgedMessagePort = {
+  close: () => void;
+  on: (event: string, listener: MessagePortListener) => unknown;
+  postMessage: (message: unknown) => void;
+  start: () => void;
+};
+
+class WebSocketMessagePort implements BridgedMessagePort {
+  private closed = false;
+  private readonly listeners = new Map<string, Set<MessagePortListener>>();
+
+  constructor(
+    private readonly portId: string,
+    private readonly sendToRenderer: (message: MainToRendererMessage) => void,
+    private readonly onClosed: () => void,
+  ) {}
+
+  on(event: string, listener: MessagePortListener): this {
+    const listeners = this.listeners.get(event) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(event, listeners);
+
+    return this;
+  }
+
+  postMessage(data: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    this.sendToRenderer({
+      type: "message-port-message",
+      portId: this.portId,
+      data,
+    });
+  }
+
+  start(): void {}
+
+  close(): void {
+    if (!this.markClosed()) {
+      return;
+    }
+    this.sendToRenderer({
+      type: "message-port-close",
+      portId: this.portId,
+    });
+  }
+
+  receiveMessage(data: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    const listeners = this.listeners.get("message");
+    if (!listeners || listeners.size === 0) {
+      return;
+    }
+    for (const listener of listeners) {
+      listener({ data });
+    }
+  }
+
+  disconnect(): void {
+    if (!this.markClosed()) {
+      return;
+    }
+    this.emit("close");
+  }
+
+  private emit(event: string, ...args: unknown[]): void {
+    for (const listener of this.listeners.get(event) ?? []) {
+      listener(...args);
+    }
+  }
+
+  private markClosed(): boolean {
+    if (this.closed) {
+      return false;
+    }
+    this.closed = true;
+    this.onClosed();
+    return true;
+  }
+}
 
 function workspaceDirectoryEntryTypeRank(
   entry: WorkspaceDirectoryEntry,
@@ -152,6 +270,12 @@ function compareWorkspaceDirectoryEntries(
 type IpcMainBridgeState = {
   broadcastToRenderer?: (message: MainToRendererMessage) => void;
   handleRendererInvoke?: (channel: string, args: unknown[]) => Promise<unknown>;
+  handleRendererPostMessage?: (
+    channel: string,
+    message: unknown,
+    ports: BridgedMessagePort[],
+    sourceUrl?: string,
+  ) => void;
   handleRendererSend?: (channel: string, args: unknown[]) => void;
   handleRendererPortConnect?: (portId: string, channel: string) => void;
   handleRendererPortMessage?: (portId: string, data: unknown) => void;
@@ -318,6 +442,8 @@ async function getWorkspaceDirectoryEntries({
 }
 
 function ensureElectronLikeProcessContext(): void {
+  process.env.BUILD_FLAVOR = "prod";
+
   const versions = process.versions as NodeJS.ProcessVersions & {
     electron?: string;
   };
@@ -331,9 +457,17 @@ function ensureElectronLikeProcessContext(): void {
   }
 
   const processWithElectronFields = process as NodeJS.Process & {
+    getSystemVersion?: () => string;
     resourcesPath?: string;
     type?: string;
   };
+  const systemVersion =
+    process.platform === "darwin"
+      ? execFileSync("/usr/bin/sw_vers", ["-productVersion"], {
+          encoding: "utf8",
+        }).trim()
+      : os.release();
+  processWithElectronFields.getSystemVersion ??= () => systemVersion;
   processWithElectronFields.resourcesPath ??= path.resolve(
     __dirname,
     "../../scratch/asar",
@@ -489,9 +623,37 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       missedPings.set(socket, 0);
     });
 
+    const messagePorts = new Map<string, WebSocketMessagePort>();
+    const dispatchPostMessage = (
+      channel: string,
+      message: unknown,
+      ports: WebSocketMessagePort[],
+      sourceUrl?: string,
+    ): void => {
+      const handler = bridgeState.handleRendererPostMessage;
+      if (handler) {
+        handler(channel, message, ports, sourceUrl);
+        return;
+      }
+
+      console.error(
+        `[ipc-bridge] no ipcMain postMessage handler for channel ${channel}`,
+      );
+      for (const port of ports) {
+        port.close();
+      }
+    };
+
     socket.on("close", () => {
       sockets.delete(socket);
+<<<<<<< HEAD
       missedPings.delete(socket);
+=======
+      for (const port of messagePorts.values()) {
+        port.disconnect();
+      }
+      messagePorts.clear();
+>>>>>>> main
     });
 
     socket.on("message", (rawData) => {
@@ -509,6 +671,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
         return;
       }
 
+<<<<<<< HEAD
       if (message.type === "app-host-port-connect") {
         bridgeState.handleRendererPortConnect?.(message.portId, message.channel);
         return;
@@ -521,6 +684,48 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
       if (message.type === "app-host-port-close") {
         bridgeState.handleRendererPortClose?.(message.portId);
+=======
+      if (message.type === "ipc-renderer-post-message") {
+        if (new Set(message.portIds).size !== message.portIds.length) {
+          console.error("[ipc-bridge] duplicate transferred MessagePort id");
+          return;
+        }
+
+        const ports = message.portIds.map((portId) => {
+          const existingPort = messagePorts.get(portId);
+          if (existingPort) {
+            existingPort.disconnect();
+          }
+          const port = new WebSocketMessagePort(
+            portId,
+            (message) => {
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify(message));
+              }
+            },
+            () => messagePorts.delete(portId),
+          );
+          messagePorts.set(portId, port);
+          return port;
+        });
+
+        dispatchPostMessage(
+          message.channel,
+          message.message,
+          ports,
+          message.sourceUrl,
+        );
+        return;
+      }
+
+      if (message.type === "message-port-message") {
+        messagePorts.get(message.portId)?.receiveMessage(message.data);
+        return;
+      }
+
+      if (message.type === "message-port-close") {
+        messagePorts.get(message.portId)?.disconnect();
+>>>>>>> main
         return;
       }
 
@@ -610,6 +815,17 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
   ensureElectronLikeProcessContext();
   installModuleAliasHook();
+
+  const packageJson = JSON.parse(
+    await fs.readFile(
+      path.resolve(__dirname, "../../scratch/asar/package.json"),
+      "utf8",
+    ),
+  );
+
+  globalThis.__CODEX_SHIM_VALUES__ = {
+    version: packageJson.version,
+  };
 
   const matches = await glob("../../scratch/asar/.vite/build/main-*.js", {
     nodir: true,

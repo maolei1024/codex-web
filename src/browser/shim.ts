@@ -12,7 +12,6 @@ import { installMobileViewportGuard } from "./mobile-viewport";
 import { reconnectDelayMs } from "./reconnect";
 
 import {
-  installWorkspaceRootDialog,
   openSelectWorkspaceRootDialog,
   type WorkspaceDirectoryEntries,
 } from "./workspace-root-dialog";
@@ -39,6 +38,21 @@ type RendererToMainMessage =
       requestId: string;
       channel: string;
       args: unknown[];
+    }
+  | {
+      type: "ipc-renderer-post-message";
+      channel: string;
+      message: unknown;
+      portIds: string[];
+    }
+  | {
+      type: "message-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "message-port-close";
+      portId: string;
     }
   | {
       type: "ipc-renderer-send";
@@ -107,6 +121,15 @@ type MainToRendererMessage =
       requestId: string;
       ok: false;
       errorMessage: string;
+    }
+  | {
+      type: "message-port-message";
+      portId: string;
+      data: unknown;
+    }
+  | {
+      type: "message-port-close";
+      portId: string;
     };
 
 const CLIENT_STALE_TIMEOUT_MS = 45_000;
@@ -127,6 +150,12 @@ type MemoryNavigationChange = {
   };
 };
 
+type StatsigGateEvaluation = {
+  name: string;
+  value: boolean;
+  [key: string]: unknown;
+};
+
 type ElectronShimState = {
   initialRoute?: string;
   initialSidebarState?: boolean;
@@ -134,16 +163,10 @@ type ElectronShimState = {
   onMemoryNavigationChanged?: (navigation: MemoryNavigationChange) => void;
   overrideAdapter?: {
     getGateOverride?: (
-      e: StatsigGateEvaluation,
+      evaluation: StatsigGateEvaluation,
       ...args: unknown[]
     ) => StatsigGateEvaluation | null;
   };
-};
-
-type StatsigGateEvaluation = {
-  name: string;
-  value: boolean;
-  [key: string]: unknown;
 };
 
 declare global {
@@ -177,6 +200,7 @@ const pendingDirectoryEntries = new Map<
   }
 >();
 const rendererListeners = new Map<string, Set<IpcListener>>();
+<<<<<<< HEAD
 const bridgedPorts = new Map<string, MessagePort>();
 
 const MESSAGE_FOR_VIEW_CHANNEL = "codex_desktop:message-for-view";
@@ -216,6 +240,9 @@ function scheduleReconnectRecovery(): void {
     ]);
   }, 2_000);
 }
+=======
+const messagePorts = new Map<string, MessagePort>();
+>>>>>>> main
 
 function unimplemented(method: string): never {
   debugger;
@@ -276,6 +303,18 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
       return;
     }
     pending.reject(new Error(message.errorMessage));
+    return;
+  }
+
+  if (message.type === "message-port-message") {
+    messagePorts.get(message.portId)?.postMessage(message.data);
+    return;
+  }
+
+  if (message.type === "message-port-close") {
+    const port = messagePorts.get(message.portId);
+    messagePorts.delete(message.portId);
+    port?.close();
     return;
   }
 
@@ -411,6 +450,7 @@ function ensureSocket(): void {
       );
     }
   });
+<<<<<<< HEAD
   currentSocket.addEventListener("close", () => {
     if (socket !== currentSocket) {
       return;
@@ -420,6 +460,13 @@ function ensureSocket(): void {
       maybeProbeAuthFailure();
     }
     failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
+=======
+  socket.addEventListener("close", () => {
+    for (const port of messagePorts.values()) {
+      port.close();
+    }
+    messagePorts.clear();
+>>>>>>> main
     scheduleReconnect();
   });
   currentSocket.addEventListener("error", () => {
@@ -528,14 +575,38 @@ const themeMediaQuery = matchMedia("(prefers-color-scheme: dark)");
 const mobileMediaQuery = matchMedia("(max-width: 768px)");
 const initialSidebarState = !mobileMediaQuery.matches;
 const electronShim = (window.__ELECTRON_SHIM__ ??= {});
+const buildFlavor: "prod" | "dev" | "agent" | string = "prod";
+
+Object.assign(globalThis, {
+  process: {
+    arch: "arm64",
+    platform: "darwin",
+    versions: {
+      electron: "41.2.0",
+    },
+  },
+});
 
 electronShim.overrideAdapter = {
+<<<<<<< HEAD
   getGateOverride(e) {
     if (e.name === "2929582856") {
       // codex_app_sunset
+=======
+  getGateOverride(evaluation) {
+    if (evaluation.name === "2911712394") {
+>>>>>>> main
       return {
-        ...e,
-        value: false,
+        ...evaluation,
+        value: true,
+      };
+    }
+
+    if (evaluation.name === "1042620455") {
+      // Remote control (Slingshot).
+      return {
+        ...evaluation,
+        value: true,
       };
     }
 
@@ -615,8 +686,6 @@ electronShim.onMemoryNavigationChanged = (navigation) => {
   window.history.pushState(undefined, "", browserPath.path);
 };
 
-const buildFlavor: "prod" | "dev" | "agent" | string = "prod";
-
 export const ipcRenderer = {
   invoke(channel: string, ...args: unknown[]): Promise<unknown> {
     if (channel === "codex_desktop:message-from-view" && args.length === 1) {
@@ -688,6 +757,7 @@ export const ipcRenderer = {
   },
   postMessage(
     channel: string,
+<<<<<<< HEAD
     _message: unknown,
     transfer?: MessagePort[],
   ): void {
@@ -710,6 +780,50 @@ export const ipcRenderer = {
     };
     port.start();
     enqueueMessage({ type: "app-host-port-connect", portId, channel });
+=======
+    message: unknown,
+    transfer?: Transferable[],
+  ): void {
+    if (transfer && transfer.length > 0) {
+      const portIds = transfer.map((transferable) => {
+        if (!(transferable instanceof MessagePort)) {
+          throw new TypeError(
+            "Only MessagePort transfers are supported by the browser IPC bridge.",
+          );
+        }
+
+        const portId = `message_port_${nextRequestId()}`;
+        messagePorts.set(portId, transferable);
+        transferable.addEventListener("message", (event) => {
+          enqueueMessage({
+            type: "message-port-message",
+            portId,
+            data: event.data,
+          });
+        });
+        transferable.addEventListener("messageerror", () => {
+          messagePorts.delete(portId);
+          enqueueMessage({ type: "message-port-close", portId });
+        });
+        transferable.start();
+        return portId;
+      });
+
+      enqueueMessage({
+        type: "ipc-renderer-post-message",
+        channel,
+        message,
+        portIds,
+      });
+      return;
+    }
+
+    enqueueMessage({
+      type: "ipc-renderer-send",
+      channel,
+      args: [message],
+    });
+>>>>>>> main
   },
   sendSync(channel: string, ..._args: unknown[]): unknown {
     if (channel === "codex_desktop:get-sentry-init-options") {
@@ -732,37 +846,22 @@ export const ipcRenderer = {
 
     if (channel === "codex_desktop:get-shared-object-snapshot") {
       return {
-        host_config: {
-          id: "local",
-          display_name: "Local",
-          kind: "local",
-        },
-        remote_connections: [],
-        remote_control_connections: [],
+        host_config: { id: "local", display_name: "Local", kind: "local" },
+        remote_ssh_connections: [],
+        remote_wsl_connections: [],
         remote_control_connections_state: {
           available: false,
+          accessRequired: false,
           authRequired: false,
+          clientAuthorized: false,
         },
+        local_remote_control_client_id: null,
         pending_worktrees: [],
-        statsig_default_enable_features: {
-          enable_request_compression: true,
-          collaboration_modes: true,
-          personality: true,
-          request_rule: true,
-          fast_mode: true,
-          image_generation: true,
-          image_detail_original: true,
-          workspace_dependencies: true,
-          guardian_approval: true,
-          apps: true,
-          plugins: true,
-          tool_search: true,
-          tool_suggest: false,
-          tool_call_mcp_elicitation: true,
-          memories: false,
-          realtime_conversation: false,
-        },
       };
+    }
+
+    if (channel === "codex_desktop:get-initial-sidebar-bootstrap") {
+      return null;
     }
 
     if (channel === "codex_desktop:get-system-theme-variant") {

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 --- a/.vite/build/sqlite-BqLffnB9.js
 +++ b/.vite/build/sqlite-BqLffnB9.js
 @@ -42675,6 +42675,7 @@
@@ -18,3 +19,25 @@
      dsn: sW,
      environment: e.buildFlavor,
      release: cW(n.version),
+=======
+--- a/.vite/build/worker.js
++++ b/.vite/build/worker.js
+@@ -96340,6 +96340,7 @@
+   let n = zR(e.appVersion),
+     r = e.buildFlavor !== `prod`;
+   (Lse({
++    enabled: !1,
+     dsn: e.dsn,
+     environment: e.buildFlavor,
+     release: NH(n.version),
+--- a/.vite/build/window-all-closed-KNH8jchn.js
++++ b/.vite/build/window-all-closed-KNH8jchn.js
+@@ -22081,6 +22081,7 @@
+   let c = he(e.version);
+   return (
+     dS({
++      enabled: !1,
+       dsn: DC.dsn,
+       environment: DC.buildFlavor,
+       release: c,
+>>>>>>> main

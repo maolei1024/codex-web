@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 --- a/webview/assets/app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js
 +++ b/webview/assets/app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js
 @@ -218974,6 +218974,7 @@
@@ -8,3 +9,15 @@
      beforeSend: zkt,
      dsn: bCe,
      environment: E5n,
+=======
+--- a/webview/assets/app-initial-236e1501144c.js
++++ b/webview/assets/app-initial-236e1501144c.js
+@@ -357239,6 +357239,7 @@
+     n = JSt(e.appVersion),
+     r = e.buildFlavor !== `prod`;
+   (FBa({
++    enabled: !1,
+     beforeBreadcrumb: fIt,
+     beforeSend: $Sn,
+     dsn: e.dsn,
+>>>>>>> main

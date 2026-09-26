@@ -1,6 +1,10 @@
 --- a/webview/index.html
 +++ b/webview/index.html
+<<<<<<< HEAD
 @@ -131,6 +131,77 @@
+=======
+@@ -132,6 +132,11 @@
+>>>>>>> main
          }
        }
      </style>
@@ -75,6 +79,12 @@
 +        }
 +      }
 +    </style>
+<<<<<<< HEAD
      <script type="module" crossorigin src="./assets/index-CSKm7Mu1.js"></script>
      <link
        rel="modulepreload"
+=======
+     <script
+       type="module"
+       crossorigin
+>>>>>>> main
