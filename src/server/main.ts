@@ -581,6 +581,10 @@ export async function startIpcBridgeServer(
   });
   const sockets = new Set<WebSocket>();
   const missedPings = new Map<WebSocket, number>();
+  // Desktop sees a single renderer. Balance its reference-counted subscriptions
+  // across browser sockets, including sockets lost during refresh/reconnect.
+  const sharedObjectSubscriptions = new Map<WebSocket, Map<string, number>>();
+  const viewMessageChannel = "codex_desktop:message-from-view";
 
   if (options.token !== null) {
     installAuthHook(app, options.token);
@@ -736,10 +740,24 @@ export async function startIpcBridgeServer(
   });
 
   bridgeState.broadcastToRenderer = (message: MainToRendererMessage): void => {
-    const payload = JSON.stringify(message);
+    const event =
+      message.type === "ipc-main-event" &&
+      message.channel === "codex_desktop:message-for-view"
+        ? (message.args[0] as { type?: string; key?: unknown } | undefined)
+        : undefined;
+    const sharedKey =
+      event?.type === "shared-object-updated" && typeof event.key === "string"
+        ? event.key
+        : null;
+    let payload: string | undefined;
     for (const socket of sockets) {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(payload);
+      if (
+        socket.readyState === WebSocket.OPEN &&
+        (sharedKey === null ||
+          sharedObjectSubscriptions.get(socket)?.has(sharedKey))
+      ) {
+        // Do not serialize large snapshots when nobody is reading them.
+        socket.send((payload ??= JSON.stringify(message)));
       }
     }
   };
@@ -747,6 +765,8 @@ export async function startIpcBridgeServer(
   websocketServer.on("connection", (socket) => {
     sockets.add(socket);
     missedPings.set(socket, 0);
+    const subscriptions = new Map<string, number>();
+    sharedObjectSubscriptions.set(socket, subscriptions);
 
     // ws already closes protocol/size/decompression failures with the correct
     // close code. Consume its error event so a rejected frame cannot terminate
@@ -780,6 +800,19 @@ export async function startIpcBridgeServer(
     socket.on("close", () => {
       sockets.delete(socket);
       missedPings.delete(socket);
+      sharedObjectSubscriptions.delete(socket);
+      for (const [key, count] of subscriptions) {
+        for (let i = 0; i < count; i++) {
+          void Promise.resolve()
+            .then(() =>
+              bridgeState.handleRendererInvoke?.(viewMessageChannel, [
+                { type: "shared-object-unsubscribe", key },
+              ]),
+            )
+            .catch(() => {});
+        }
+      }
+      subscriptions.clear();
       for (const port of messagePorts.values()) {
         port.disconnect();
       }
@@ -881,13 +914,31 @@ export async function startIpcBridgeServer(
         }
         const { channel, requestId, args } = message;
         sanitizeOutboundMcpRequestArgs(args);
+        const event =
+          channel === viewMessageChannel
+            ? (args[0] as { type?: string; key?: unknown } | undefined)
+            : undefined;
+        let forward = true;
+        if (typeof event?.key === "string") {
+          const count = subscriptions.get(event.key) ?? 0;
+          if (event.type === "shared-object-subscribe") {
+            subscriptions.set(event.key, count + 1);
+          } else if (event.type === "shared-object-unsubscribe") {
+            // An unbalanced client must not release another tab's subscription.
+            forward = count > 0;
+            if (count > 1) subscriptions.set(event.key, count - 1);
+            else subscriptions.delete(event.key);
+          }
+        }
         Promise.resolve(
-          bridgeState.handleRendererInvoke?.(channel, args) ??
-            Promise.reject(
-              new Error(
-                `[ipc-bridge] no ipcMain.handle for channel ${channel}`,
-              ),
-            ),
+          !forward
+            ? null
+            : (bridgeState.handleRendererInvoke?.(channel, args) ??
+                Promise.reject(
+                  new Error(
+                    `[ipc-bridge] no ipcMain.handle for channel ${channel}`,
+                  ),
+                )),
         )
           .then((result) => {
             const payload: MainToRendererMessage = {

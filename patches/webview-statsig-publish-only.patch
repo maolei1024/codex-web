@@ -1,0 +1,13 @@
+--- a/webview/assets/app-initial-236e1501144c.js
++++ b/webview/assets/app-initial-236e1501144c.js
+@@ -3,7 +3,9 @@
+     { client: n } = e,
+     r = hb(Q),
+     [, i] = iE(`statsig_default_enable_features`),
+-    [, a] = iE(`statsig_evaluations`),
++    // Only publish this SDK's values. Subscribing reads back a large snapshot
++    // from another renderer that this component never uses.
++    a = PUo.useCallback((value) => GT(r, `statsig_evaluations`, value), [r]),
+     o,
+     s;
+   (t[0] !== n || t[1] !== r

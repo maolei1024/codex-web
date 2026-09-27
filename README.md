@@ -35,6 +35,10 @@ cache miss, the Statsig SDK waits at most one second for remote configuration,
 then starts with its existing cached values/defaults and refreshes in the
 background. Remote configuration failures must not hold the Web shell behind
 network retries. This does not change account authorization or model requests.
+The browser publishes its SDK evaluations without subscribing to a full snapshot
+from other renderers. Shared-object updates go only to subscribing WebSocket
+clients; disconnects release Desktop subscription references, so refreshes do
+not accumulate subscriptions or queue unused configuration ahead of history.
 
 https://github.com/user-attachments/assets/0a33cbd8-741c-412c-9e75-46dfe9324596
 

@@ -82,6 +82,164 @@ function closeWebSocket(socket) {
   });
 }
 
+test("shared objects stay within subscribing tabs and disconnect releases references", async () => {
+  const bridge = (globalThis.__codexElectronIpcBridge ??= {});
+  const previousHandler = bridge.handleRendererInvoke;
+  const refs = new Map();
+  const received = new Map();
+  const clients = new Set();
+  const channel = "codex_desktop:message-from-view";
+  const eventChannel = "codex_desktop:message-for-view";
+  const update = (key, value) =>
+    bridge.broadcastToRenderer({
+      type: "ipc-main-event",
+      channel: eventChannel,
+      args: [{ type: "shared-object-updated", key, value }],
+    });
+  bridge.handleRendererInvoke = async (_channel, [event]) => {
+    if (event.type === "shared-object-subscribe") {
+      refs.set(event.key, (refs.get(event.key) ?? 0) + 1);
+      update(event.key, "initial snapshot");
+    } else if (event.type === "shared-object-unsubscribe") {
+      refs.set(event.key, (refs.get(event.key) ?? 0) - 1);
+    } else if (event.type === "shared-object-set") {
+      update(event.key, event.value);
+    }
+    return null;
+  };
+  const app = await startIpcBridgeServer(options(), {
+    launchDesktopApp: false,
+  });
+  let sequence = 0;
+  const connect = async () => {
+    const socket = await openWebSocket(
+      `ws://127.0.0.1:${app.server.address().port}/__backend/ipc?token=${TOKEN}`,
+    );
+    clients.add(socket);
+    received.set(socket, []);
+    socket.on("message", (data) => received.get(socket).push(JSON.parse(data)));
+    return socket;
+  };
+  const invoke = (socket, event) =>
+    new Promise((resolve, reject) => {
+      const requestId = `subscription-test-${sequence++}`;
+      const timer = setTimeout(
+        () => reject(new Error("invoke timed out")),
+        2000,
+      );
+      const listener = (data) => {
+        const message = JSON.parse(data);
+        if (message.requestId !== requestId) return;
+        clearTimeout(timer);
+        socket.off("message", listener);
+        assert.equal(message.ok, true);
+        resolve();
+      };
+      socket.on("message", listener);
+      socket.send(
+        JSON.stringify({
+          type: "ipc-renderer-invoke",
+          channel,
+          requestId,
+          args: [event],
+        }),
+      );
+    });
+  const events = (socket) =>
+    received.get(socket).filter((m) => m.type === "ipc-main-event");
+  const barrier = async () => {
+    for (const socket of clients)
+      await invoke(socket, { type: "test-barrier" });
+  };
+  try {
+    const a = await connect(),
+      b = await connect(),
+      c = await connect();
+    await invoke(a, {
+      type: "shared-object-subscribe",
+      key: "remote_ssh_connections",
+    });
+    await invoke(b, {
+      type: "shared-object-subscribe",
+      key: "remote_ssh_connections",
+    });
+    await invoke(a, {
+      type: "shared-object-subscribe",
+      key: "remote_ssh_connections",
+    });
+    await invoke(a, {
+      type: "shared-object-subscribe",
+      key: "statsig_evaluations",
+    });
+    await barrier();
+    assert.equal(refs.get("remote_ssh_connections"), 3);
+    assert.equal(
+      events(b).filter((m) => m.args[0].key === "remote_ssh_connections")
+        .length,
+      2,
+    );
+    assert.equal(
+      events(b).filter((m) => m.args[0].key === "statsig_evaluations").length,
+      0,
+    );
+    assert.equal(events(c).length, 0);
+
+    // A publisher need not subscribe to (or receive) its own multi-MB value.
+    await invoke(c, {
+      type: "shared-object-set",
+      key: "statsig_evaluations",
+      value: "x".repeat(100_000),
+    });
+    await barrier();
+    assert.equal(events(a).at(-1).args[0].value.length, 100_000);
+    assert.equal(events(c).length, 0);
+    await invoke(c, {
+      type: "shared-object-unsubscribe",
+      key: "remote_ssh_connections",
+    });
+    assert.equal(refs.get("remote_ssh_connections"), 3);
+    await invoke(a, {
+      type: "shared-object-unsubscribe",
+      key: "remote_ssh_connections",
+    });
+    await closeWebSocket(a);
+    clients.delete(a);
+    await barrier();
+    assert.equal(refs.get("remote_ssh_connections"), 1);
+    assert.equal(refs.get("statsig_evaluations"), 0);
+
+    received.get(b).length = 0;
+    received.get(c).length = 0;
+    update("remote_ssh_connections", "changed while another tab disconnected");
+    update("statsig_evaluations", "nobody reads this");
+    bridge.broadcastToRenderer({
+      type: "ipc-main-event",
+      channel: eventChannel,
+      args: [{ type: "mcp-notification" }],
+    });
+    await barrier();
+    assert.deepEqual(
+      events(b).map((m) => m.args[0].type),
+      ["shared-object-updated", "mcp-notification"],
+    );
+    assert.deepEqual(
+      events(c).map((m) => m.args[0].type),
+      ["mcp-notification"],
+    );
+    const reconnected = await connect();
+    await invoke(reconnected, {
+      type: "shared-object-subscribe",
+      key: "remote_ssh_connections",
+    });
+    assert.equal(events(reconnected)[0].args[0].value, "initial snapshot");
+    assert.equal(refs.get("remote_ssh_connections"), 2);
+  } finally {
+    for (const client of clients) await closeWebSocket(client);
+    await app.close();
+    bridge.handleRendererInvoke = previousHandler;
+  }
+});
+
 test("server args accept environment and CLI upload limits", () => {
   const parsed = parseServerArgs(
     ["--port", "9000", "--max-upload-files", "3"],
