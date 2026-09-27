@@ -182,6 +182,8 @@ someone with access to the web ui may be able to:
 
 - The saved language setting loads the Desktop translations, including Chinese.
 - Project and chat context menus use Desktop's browser menu components.
+- The sidebar's **View activity** button is available even when the upstream
+  feature configuration cannot be fetched; Desktop's access checks still apply.
 - Settings → Connections exposes native SSH hosts. Here “this computer” means
   the Web server: SSH configuration and keys must be available to that server.
   New remote projects use **Remote**, not **Cloud**.

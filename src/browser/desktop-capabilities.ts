@@ -23,7 +23,8 @@ export const desktopCapabilityOverrides = {
     if (
       evaluation.name === "2911712394" ||
       evaluation.name === "1042620455" || // Remote control (Slingshot).
-      evaluation.name === "4114442250" // Native SSH connections and settings.
+      evaluation.name === "4114442250" || // Native SSH connections and settings.
+      evaluation.name === "4039078146" // Sidebar activity view.
     ) {
       return { ...evaluation, value: true };
     }

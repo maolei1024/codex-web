@@ -25,11 +25,18 @@ test("translation loading is enabled while keeping locale policy and metadata", 
   );
 });
 
-test("SSH settings work without a Statsig account; unknown permissions are untouched", () => {
-  assert.equal(
-    overrides.getGateOverride({ name: "4114442250", value: false }).value,
-    true,
-  );
+test("SSH and activity UI work without Statsig values; unknown permissions are untouched", () => {
+  for (const name of ["4114442250", "4039078146"]) {
+    const evaluation = Object.freeze({
+      name,
+      value: false,
+      details: { reason: "NoValues" },
+    });
+    assert.deepEqual(overrides.getGateOverride(evaluation), {
+      ...evaluation,
+      value: true,
+    });
+  }
   assert.equal(
     overrides.getGateOverride({ name: "cloud-projects", value: false }),
     null,
