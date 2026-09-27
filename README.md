@@ -24,6 +24,18 @@ change an existing service deployment.
 shipping changed browser assets, then rebuild; the server checks that this ID
 matches the generated `asset-version.json` before serving them.
 
+Versioned assets, including the browser preload, are immutable for one year.
+Reverse proxies must preserve their `Cache-Control` header without appending
+`no-cache`; unversioned preload URLs still revalidate. HTML stays revalidatable
+so a new release selects the new asset namespace. Authentication is checked
+before serving assets; conversation data is not part of the static asset cache.
+
+Feature configuration uses an identity-scoped snapshot when available. On a
+cache miss, the Statsig SDK waits at most one second for remote configuration,
+then starts with its existing cached values/defaults and refreshes in the
+background. Remote configuration failures must not hold the Web shell behind
+network retries. This does not change account authorization or model requests.
+
 https://github.com/user-attachments/assets/0a33cbd8-741c-412c-9e75-46dfe9324596
 
 ## motivation

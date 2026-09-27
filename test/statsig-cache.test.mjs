@@ -9,6 +9,7 @@ const {
   targetingIdentity,
   STATSIG_CACHE_TTL_MS,
   STATSIG_CACHE_ENTRY_MAX_BYTES,
+  STATSIG_STARTUP_TIMEOUT_MS,
 } = await importTypescriptModule("src/browser/statsig-cache.ts");
 const BUILD = "26.901-test";
 const SDK = "client-test-sdk";
@@ -162,6 +163,71 @@ test("cold startup fetches once and saves a network-validated snapshot", async (
   assert.equal(client.networkCalls, 1);
   assert.equal(f.records.size, 1);
   assert.deepEqual(f.marks, ["cache-miss", "ready"]);
+});
+
+test("cold startup bounds the SDK wait and preserves caller options and shorter deadlines", async () => {
+  for (const [timeoutMs, expected] of [
+    [undefined, STATSIG_STARTUP_TIMEOUT_MS],
+    [30_000, STATSIG_STARTUP_TIMEOUT_MS],
+    [250, 250],
+    [0, STATSIG_STARTUP_TIMEOUT_MS],
+    [NaN, STATSIG_STARTUP_TIMEOUT_MS],
+  ]) {
+    const f = fixture();
+    const client = fakeClient(f);
+    const initialize = client.initializeAsync.bind(client);
+    let received;
+    client.initializeAsync = (options) => {
+      received = options;
+      return initialize(options);
+    };
+    configureStatsigClient(client, SDK, BUILD, f.deps);
+    await client.initializeAsync({ timeoutMs, priority: "low" });
+    assert.deepEqual(received, { timeoutMs: expected, priority: "low" });
+    assert.equal(client.loadingStatus, "Ready");
+    assert.equal(f.scheduled.length, 0);
+  }
+});
+
+test("unavailable feature config releases startup with SDK defaults and refreshes off the critical path", async () => {
+  const f = fixture();
+  const client = fakeClient(f);
+  client.initializeAsync = async () => {
+    client.loadingStatus = "Ready";
+    return { success: false, source: "NoValues" };
+  };
+  configureStatsigClient(client, SDK, BUILD, f.deps);
+  assert.deepEqual(await client.initializeAsync(), {
+    success: false,
+    source: "NoValues",
+  });
+  assert.equal(client.values, undefined, "never manufacture feature grants");
+  assert.equal(client.refreshCalls, 0);
+  assert.deepEqual(f.marks, ["cache-miss", "network-deferred", "ready"]);
+  assert.equal(f.scheduled.length, 1);
+  f.scheduled[0]();
+  await tick();
+  assert.equal(client.refreshCalls, 1);
+  assert.equal(
+    f.records.size,
+    1,
+    "background network data can populate the cache",
+  );
+});
+
+test("failed cold startup never refreshes after shutdown or an account switch", async () => {
+  for (const shutdown of [false, true]) {
+    const f = fixture();
+    const client = fakeClient(f);
+    client.initializeAsync = async () => ({ success: false });
+    configureStatsigClient(client, SDK, BUILD, f.deps);
+    await client.initializeAsync();
+    if (shutdown) client.emit("client_shutdown");
+    else client.user = { ...user, userID: "other" };
+    f.scheduled[0]();
+    await tick();
+    assert.equal(client.refreshCalls, 0);
+  }
 });
 
 test("valid snapshot starts without network and restores current session metadata", async () => {

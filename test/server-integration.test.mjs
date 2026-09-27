@@ -200,7 +200,7 @@ test("HTTP, upload and WebSocket routes enforce auth and safe paths", async () =
   await assert.rejects(readFile(uploadedPath));
 });
 
-test("versioned assets enforce auth and GET/HEAD preload revalidation never becomes immutable", async () => {
+test("versioned preload is immutable; unversioned preload revalidates and all assets enforce auth", async () => {
   const app = await startIpcBridgeServer(options(), {
     launchDesktopApp: false,
   });
@@ -213,12 +213,18 @@ test("versioned assets enforce auth and GET/HEAD preload revalidation never beco
       `/assets/__build/${LOCAL_BUILD}/preload.js`,
       `/assets/__build/${LOCAL_BUILD}/preload.js.map`,
     ]) {
+      const versioned = route.startsWith("/assets/__build/");
       assert.equal((await requestRaw(port, route)).status, 401);
       for (const encoding of ["identity", "br", "gzip"]) {
         const headers = { cookie, "accept-encoding": encoding };
         const first = await requestRaw(port, route, headers);
         assert.equal(first.status, 200, route);
-        assert.equal(first.headers["cache-control"], "no-cache");
+        if (versioned)
+          assert.match(
+            first.headers["cache-control"],
+            /max-age=31536000, immutable/,
+          );
+        else assert.equal(first.headers["cache-control"], "no-cache");
         for (const method of ["GET", "HEAD"]) {
           const cached = await requestRaw(
             port,
@@ -227,7 +233,12 @@ test("versioned assets enforce auth and GET/HEAD preload revalidation never beco
             method,
           );
           assert.equal(cached.status, 304, `${route} ${method} ${encoding}`);
-          assert.equal(cached.headers["cache-control"], "no-cache");
+          if (versioned)
+            assert.match(
+              cached.headers["cache-control"],
+              /max-age=31536000, immutable/,
+            );
+          else assert.equal(cached.headers["cache-control"], "no-cache");
           assert.equal(cached.body.length, 0);
         }
       }

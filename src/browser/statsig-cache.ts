@@ -2,6 +2,7 @@
 export const STATSIG_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 export const STATSIG_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 export const STATSIG_CACHE_ENTRY_MAX_BYTES = 8 * 1024 * 1024;
+export const STATSIG_STARTUP_TIMEOUT_MS = 1_000;
 const CACHE_SCHEMA = 1;
 const CACHE_DB = "codex-web-feature-config-v1";
 const CACHE_STORE = "snapshots";
@@ -322,6 +323,26 @@ export function configureStatsigClient<T extends StatsigClientLike>(
     active = false;
   });
 
+  const scheduleRefresh = (identity: string): void => {
+    schedule(() => {
+      if (
+        !active ||
+        generation !== cacheGeneration ||
+        refreshing ||
+        identity !== targetingIdentity(client.getContext().user)
+      )
+        return;
+      refreshing = true;
+      void client
+        .refreshValuesAsync({ timeoutMs: 15_000 })
+        .then(() => saveNetworkSnapshot())
+        .catch(() => {})
+        .finally(() => {
+          refreshing = false;
+        });
+    });
+  };
+
   client.initializeAsync = (options?: unknown) => {
     initialization ??= (async () => {
       let identity = "";
@@ -358,23 +379,7 @@ export function configureStatsigClient<T extends StatsigClientLike>(
           if (result.success !== false && client.loadingStatus === "Ready") {
             mark("cache-hit");
             mark("ready");
-            schedule(() => {
-              if (
-                !active ||
-                generation !== cacheGeneration ||
-                refreshing ||
-                identity !== targetingIdentity(client.getContext().user)
-              )
-                return;
-              refreshing = true;
-              void client
-                .refreshValuesAsync({ timeoutMs: 15_000 })
-                .then(() => saveNetworkSnapshot())
-                .catch(() => {})
-                .finally(() => {
-                  refreshing = false;
-                });
-            });
+            scheduleRefresh(identity);
             return result;
           }
         }
@@ -382,7 +387,24 @@ export function configureStatsigClient<T extends StatsigClientLike>(
         // Private browsing, blocked/evicted storage and invalid snapshots use upstream.
       }
       mark("cache-miss");
-      const result = await originalInitialize(options);
+      const initialOptions = isObject(options) ? options : {};
+      const requestedTimeout = initialOptions.timeoutMs;
+      // Use the SDK's own deadline so it finalizes its Ready state with cached
+      // values/defaults. Racing this promise ourselves would leave it Loading.
+      // Remote feature configuration is not a prerequisite for the Web shell.
+      const result = await originalInitialize({
+        ...initialOptions,
+        timeoutMs:
+          typeof requestedTimeout === "number" &&
+          Number.isFinite(requestedTimeout) &&
+          requestedTimeout > 0
+            ? Math.min(requestedTimeout, STATSIG_STARTUP_TIMEOUT_MS)
+            : STATSIG_STARTUP_TIMEOUT_MS,
+      });
+      if (result.success === false) {
+        mark("network-deferred");
+        scheduleRefresh(targetingIdentity(client.getContext().user));
+      }
       // Persist after returning control to the UI; slow storage is never a
       // second startup barrier after the upstream network request completes.
       void saveNetworkSnapshot().catch(() => {});

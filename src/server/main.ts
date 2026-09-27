@@ -648,9 +648,7 @@ export async function startIpcBridgeServer(
     if (
       (reply.statusCode === 200 || reply.statusCode === 304) &&
       (pathname === "/assets/preload.js" ||
-        pathname === "/assets/preload.js.map" ||
-        pathname === `${versionedAssetPrefix}preload.js` ||
-        pathname === `${versionedAssetPrefix}preload.js.map`)
+        pathname === "/assets/preload.js.map")
     ) {
       reply.header("cache-control", "no-cache");
     }
