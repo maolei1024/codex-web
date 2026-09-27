@@ -180,6 +180,14 @@ someone with access to the web ui may be able to:
 
 ## features
 
+- The saved language setting loads the Desktop translations, including Chinese.
+- Project and chat context menus use Desktop's browser menu components.
+- Settings → Connections exposes native SSH hosts. Here “this computer” means
+  the Web server: SSH configuration and keys must be available to that server.
+  New remote projects use **Remote**, not **Cloud**.
+- **Cloud** creates ChatGPT-hosted projects and requires a ChatGPT account with
+  project access. A custom API-key provider supplies model inference, not those
+  account APIs; this option remains disabled when that capability is unavailable.
 - hostable on macOS, Linux (and anything codex cli + node will run on)
 - reachable from the browser
 - thin wrapper, so updates should land fast

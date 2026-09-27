@@ -12,6 +12,10 @@ import { installMobileViewportGuard } from "./mobile-viewport";
 import { reconnectDelayMs } from "./reconnect";
 import { downloadErrorMessage, wrapBrowserServices } from "./downloads";
 import {
+  adaptDesktopBridge,
+  desktopCapabilityOverrides,
+} from "./desktop-capabilities";
+import {
   clearStatsigSnapshots,
   configureStatsigClient,
   type StatsigClientLike,
@@ -109,18 +113,6 @@ type MemoryNavigationChange = {
   };
 };
 
-type StatsigGateEvaluation = {
-  name: string;
-  value: boolean;
-  [key: string]: unknown;
-};
-
-type StatsigDynamicConfigEvaluation = {
-  name: string;
-  value: unknown;
-  [key: string]: unknown;
-};
-
 type ElectronShimState = {
   wrapBrowserServices?: typeof wrapBrowserServices;
   downloadErrorMessage?: typeof downloadErrorMessage;
@@ -132,16 +124,7 @@ type ElectronShimState = {
   initialSidebarState?: boolean;
   closeSidebar?: () => void;
   onMemoryNavigationChanged?: (navigation: MemoryNavigationChange) => void;
-  overrideAdapter?: {
-    getGateOverride?: (
-      evaluation: StatsigGateEvaluation,
-      ...args: unknown[]
-    ) => StatsigGateEvaluation | null;
-    getDynamicConfigOverride?: (
-      evaluation: StatsigDynamicConfigEvaluation,
-      ...args: unknown[]
-    ) => StatsigDynamicConfigEvaluation | null;
-  };
+  overrideAdapter?: typeof desktopCapabilityOverrides;
 };
 
 declare global {
@@ -543,54 +526,7 @@ Object.assign(globalThis, {
   },
 });
 
-electronShim.overrideAdapter = {
-  getGateOverride(evaluation) {
-    if (evaluation.name === "2911712394") {
-      return {
-        ...evaluation,
-        value: true,
-      };
-    }
-
-    if (evaluation.name === "1042620455") {
-      // Remote control (Slingshot).
-      return {
-        ...evaluation,
-        value: true,
-      };
-    }
-
-    return null;
-  },
-  getDynamicConfigOverride(evaluation) {
-    if (evaluation.name !== "107580212") {
-      return null;
-    }
-    const value =
-      evaluation.value && typeof evaluation.value === "object"
-        ? (evaluation.value as Record<string, unknown>)
-        : {};
-    const existing = Array.isArray(value.available_models)
-      ? (value.available_models as string[])
-      : [];
-    if (existing.length === 0) {
-      return null;
-    }
-    const additions = [
-      "gpt-6-astra",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-    ].filter((model) => !existing.includes(model));
-    if (additions.length === 0) {
-      return null;
-    }
-    return {
-      ...evaluation,
-      value: { ...value, available_models: [...existing, ...additions] },
-    };
-  },
-};
+electronShim.overrideAdapter = desktopCapabilityOverrides;
 
 const initialRoute = mapBrowserPathToInitialRoute(
   window.location.pathname,
@@ -804,7 +740,7 @@ document.addEventListener("visibilitychange", () => {
 
 export const contextBridge = {
   exposeInMainWorld(_key: string, _api: unknown): void {
-    Reflect.set(window, _key, _api);
+    Reflect.set(window, _key, adaptDesktopBridge(_key, _api));
   },
 };
 
