@@ -108,7 +108,18 @@ Its native amd64 and arm64 builds run `npm test` and a packaged runtime smoke
 check before publication. Woodpecker builds on `main` push/manual, publishes
 `docker.nexus.ixuni.win/codex/web:build-N`, and applies `k8s/codex-web.yaml`.
 Both architectures must pass before the combined image and `latest` are published.
-The deployment uses a single replica on ml256 and a 10 GiB Longhorn PVC.
+The deployment uses a single replica on ml256 with a hostPath at
+`/srv/k3s-local/project-codex-web/codex-web`, mounted at `/data`. Before the first
+deployment, create this directory on ml256 with UID/GID 1000 and mode 0700:
+
+```sh
+sudo install -d -o 1000 -g 1000 -m 0700 /srv/k3s-local/project-codex-web/codex-web
+```
+
+The manifest requires the directory to exist and keeps `Recreate` updates and
+the ml256 node selector. Storage uses the host filesystem's available capacity;
+there is no PVC or 10 GiB volume quota. Back up this directory with the application
+stopped before moving the deployment to another host.
 
 Mount persistent storage at `/data`. The container keeps its home in `/data/home`,
 Codex state in `/data/codex`, Electron state in `/data/app`, documents in

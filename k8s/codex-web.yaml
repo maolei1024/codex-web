@@ -3,18 +3,6 @@ kind: Namespace
 metadata:
   name: project-codex-web
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: codex-web-data
-  namespace: project-codex-web
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: longhorn
-  resources:
-    requests:
-      storage: 10Gi
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -80,8 +68,9 @@ spec:
               readOnly: true
       volumes:
         - name: data
-          persistentVolumeClaim:
-            claimName: codex-web-data
+          hostPath:
+            path: /srv/k3s-local/project-codex-web/codex-web
+            type: Directory
         - name: seed
           secret:
             secretName: codex-web-seed
