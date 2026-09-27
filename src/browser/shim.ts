@@ -10,6 +10,10 @@ import {
 import { getUploadedFilePath } from "./uploaded-file-paths";
 import { installMobileViewportGuard } from "./mobile-viewport";
 import { reconnectDelayMs } from "./reconnect";
+import {
+  SharedObjectSubscriptions,
+  SHARED_OBJECT_CHANNEL,
+} from "./shared-object-subscriptions";
 import { downloadErrorMessage, wrapBrowserServices } from "./downloads";
 import {
   adaptDesktopBridge,
@@ -143,6 +147,7 @@ let reconnectAttempt = 0;
 let consecutiveConnectFailures = 0;
 let authProbeInFlight = false;
 const outboundQueue: RendererToMainMessage[] = [];
+const sharedObjectSubscriptions = new SharedObjectSubscriptions();
 const pendingInvokes = new Map<
   string,
   {
@@ -376,6 +381,23 @@ function ensureSocket(): void {
     opened = true;
     reconnectAttempt = 0;
     consecutiveConnectFailures = 0;
+    // The server releases this socket's Desktop references on disconnect.
+    // Replay before flushing new calls, so queued subscribes/unsubscribes retain
+    // their normal ordering and responses. Replay replies need no JS promise.
+    for (const [key, count] of sharedObjectSubscriptions.beforeQueued(
+      outboundQueue,
+    )) {
+      for (let i = 0; i < count; i++) {
+        currentSocket.send(
+          JSON.stringify({
+            type: "ipc-renderer-invoke",
+            requestId: nextRequestId(),
+            channel: SHARED_OBJECT_CHANNEL,
+            args: [{ type: "shared-object-subscribe", key }],
+          }),
+        );
+      }
+    }
     flushOutboundQueue();
     if (hasConnectedBefore) {
       scheduleReconnectRecovery();
@@ -418,6 +440,7 @@ function ensureSocket(): void {
 }
 
 function enqueueMessage(message: RendererToMainMessage): void {
+  sharedObjectSubscriptions.track(message);
   outboundQueue.push(message);
   ensureSocket();
   flushOutboundQueue();
