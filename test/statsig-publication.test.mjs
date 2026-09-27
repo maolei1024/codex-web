@@ -30,14 +30,27 @@ test("Desktop feature publisher sends current SDK values without subscribing to 
       subscriptions.push(key);
       return [null, (value) => state.set(key, value)];
     },
-    GT: (_store, key, value) => {
-      publications.push(value);
-      state.set(key, value);
+    GT: () => {
+      assert.fail("atom setters also mount readback subscriptions");
     },
-    KT: (get, key) => get(key),
+    KT: (get, key) => {
+      assert.notEqual(
+        key,
+        "statsig_evaluations",
+        "even a one-off atom read subscribes",
+      );
+      return get(key);
+    },
+    U: {
+      dispatchMessage: (type, event) => {
+        assert.equal(type, "shared-object-set");
+        assert.equal(event.key, "statsig_evaluations");
+        publications.push(event.value);
+      },
+    },
     NUo: { default: (a, b) => JSON.stringify(a) === JSON.stringify(b) },
     PUo: {
-      useCallback: (fn) => fn,
+      useRef: (current) => ({ current }),
       useLayoutEffect() {},
       useEffect: (fn) => {
         cleanup = fn();

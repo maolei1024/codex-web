@@ -5,9 +5,24 @@
      r = hb(Q),
      [, i] = iE(`statsig_default_enable_features`),
 -    [, a] = iE(`statsig_evaluations`),
-+    // Only publish this SDK's values. Subscribing reads back a large snapshot
-+    // from another renderer that this component never uses.
-+    a = PUo.useCallback((value) => GT(r, `statsig_evaluations`, value), [r]),
++    // Atom get/set also briefly mounts a subscription. This publisher must
++    // never read the shared snapshot; keep its deduplication state locally.
++    a = PUo.useRef(null),
      o,
      s;
    (t[0] !== n || t[1] !== r
+@@ -22,7 +24,13 @@
+           let t = e?.status ?? n.loadingStatus;
+           SUo(n, t).catch(jUo);
+           let o = TUo(n);
+-          (0, NUo.default)(KT(r.get, `statsig_evaluations`), o) || a(o);
++          if (!(0, NUo.default)(a.current, o)) {
++            a.current = o;
++            U.dispatchMessage(`shared-object-set`, {
++              key: `statsig_evaluations`,
++              value: o,
++            });
++          }
+           let s =
+             o.payload === void 0
+               ? void 0
