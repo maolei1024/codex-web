@@ -38,6 +38,7 @@ patch --batch --forward --fuzz=0 --strip 1 --directory scratch/asar < patches/we
 patch --batch --forward --fuzz=0 --strip 1 --directory scratch/asar < patches/webview-statsig-override-adapter.patch
 patch --batch --forward --fuzz=0 --strip 1 --directory scratch/asar < patches/webview-statsig-cache.patch
 patch --batch --forward --fuzz=0 --strip 1 --directory scratch/asar < patches/webview-statsig-publish-only.patch
+patch --batch --forward --fuzz=0 --strip 1 --directory scratch/asar < patches/webview-image-drafts.patch
 patch --batch --forward --fuzz=0 --strip 1 --directory scratch/asar < patches/webview-prompt-search-param.patch
 patch --batch --forward --fuzz=0 --strip 1 --directory scratch/asar < patches/sentry-disable-shell.patch
 patch --batch --forward --fuzz=0 --strip 1 --directory scratch/asar < patches/sentry-disable-webview.patch

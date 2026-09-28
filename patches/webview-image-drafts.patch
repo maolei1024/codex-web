@@ -1,0 +1,37 @@
+--- a/webview/assets/app-initial-236e1501144c.js
++++ b/webview/assets/app-initial-236e1501144c.js
+@@ -384292,6 +384292,8 @@
+       e.value.entrypoint === `home` &&
+       r.imageAttachments !== n.imageAttachments &&
+       e.set(qto, r.imageAttachments),
++    r.imageAttachments !== n.imageAttachments &&
++      window.__ELECTRON_SHIM__.imageDrafts.save(H1a(e), r.imageAttachments),
+     e.set(Jto, r));
+ }
+ function rto(e) {
+@@ -384673,10 +384675,15 @@
+       })),
+       (Jto = My(iK, ({ scope: e }) => e.get(d0)?.viewState, {
+         onMount(e, t) {
+-          if (t.value.kind !== `local`) return;
++          const stopImageDraft = window.__ELECTRON_SHIM__.imageDrafts.mount(
++            H1a(t),
++            () => t.get(m0).imageAttachments,
++            (images) => s0(t, (state) => { state.imageAttachments = images; }),
++          );
++          if (t.value.kind !== `local`) return stopImageDraft;
+           let { clientThreadId: n, conversationId: r } = t.value,
+             i = t.get(d0);
+-          return (
++          const stopDesktopWatch = (
+             r != null &&
+               i != null &&
+               (e(i.viewState),
+@@ -384704,6 +384711,7 @@
+                   t.set(Kto, n, [])));
+             })
+           );
++          return () => { stopImageDraft(); stopDesktopWatch?.(); };
+         },
+       })),
+       (Yto = Iy(iK, ({ get: e, scope: t }) => {

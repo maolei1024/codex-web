@@ -8,6 +8,7 @@ import {
   isLocalFilePickerMessage,
 } from "./files";
 import { getUploadedFilePath } from "./uploaded-file-paths";
+import { imageDrafts } from "./image-drafts";
 import { installMobileViewportGuard } from "./mobile-viewport";
 import { reconnectDelayMs } from "./reconnect";
 import {
@@ -118,6 +119,7 @@ type MemoryNavigationChange = {
 };
 
 type ElectronShimState = {
+  imageDrafts?: typeof imageDrafts;
   wrapBrowserServices?: typeof wrapBrowserServices;
   downloadErrorMessage?: typeof downloadErrorMessage;
   configureStatsigClient?: <T extends StatsigClientLike>(
@@ -533,6 +535,7 @@ const themeMediaQuery = matchMedia("(prefers-color-scheme: dark)");
 const mobileMediaQuery = matchMedia("(max-width: 768px)");
 const initialSidebarState = !mobileMediaQuery.matches;
 const electronShim = (window.__ELECTRON_SHIM__ ??= {});
+electronShim.imageDrafts = imageDrafts;
 electronShim.wrapBrowserServices = wrapBrowserServices;
 electronShim.downloadErrorMessage = downloadErrorMessage;
 electronShim.configureStatsigClient = (client, sdkKey) =>

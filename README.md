@@ -42,6 +42,16 @@ not accumulate subscriptions or queue unused configuration ahead of history.
 The browser restores active subscriptions on reconnect before flushing pending
 subscription changes, including after failed connection attempts.
 
+Unsent image attachments are saved in this browser's IndexedDB alongside the
+existing text draft behavior. Refreshing restores the images to the same task's
+composer (including the new-task composer). Original image data is retained, so
+restored images remain sendable after temporary server uploads expire. Removing
+an image or sending the draft clears its saved attachment; saving does not run
+on every text keystroke. If browser storage is unavailable or full, an alert
+appears. Draft images stay on this browser and origin: they are not synced across
+devices and are removed when site data is cleared. Files still being read or
+uploaded when the page is interrupted may not yet have a saved draft.
+
 https://github.com/user-attachments/assets/0a33cbd8-741c-412c-9e75-46dfe9324596
 
 ## motivation
