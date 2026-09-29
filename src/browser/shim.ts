@@ -11,6 +11,9 @@ import { getUploadedFilePath } from "./uploaded-file-paths";
 import { imageDrafts } from "./image-drafts";
 import { installMobileViewportGuard } from "./mobile-viewport";
 import { reconnectDelayMs } from "./reconnect";
+import { RpcLifecycle, isTransportFailure } from "./rpc-lifecycle";
+import { ReconnectRecovery } from "./reconnect-recovery";
+import { ConnectionWatchdog } from "./connection-watchdog";
 import {
   SharedObjectSubscriptions,
   SHARED_OBJECT_CHANNEL,
@@ -33,6 +36,7 @@ import {
 type IpcListener = (event: unknown, ...args: unknown[]) => void;
 
 type RendererToMainMessage =
+  | { type: "bridge-ping"; requestId: string }
   | {
       type: "ipc-renderer-invoke";
       requestId: string;
@@ -67,6 +71,7 @@ type RendererToMainMessage =
     };
 
 type MainToRendererMessage =
+  | { type: "bridge-pong"; requestId: string }
   | {
       type: "ipc-main-event";
       channel: string;
@@ -119,6 +124,8 @@ type MemoryNavigationChange = {
 };
 
 type ElectronShimState = {
+  appServerRequestLifecycle?: RpcLifecycle["onLifecycle"];
+  isTransportFailure?: typeof isTransportFailure;
   imageDrafts?: typeof imageDrafts;
   wrapBrowserServices?: typeof wrapBrowserServices;
   downloadErrorMessage?: typeof downloadErrorMessage;
@@ -171,31 +178,46 @@ const AUTH_PROBE_FAILURE_INTERVAL = 5;
 const DISCONNECT_ERROR_MESSAGE =
   "[electron-stub] IPC bridge disconnected before the response arrived; the connection is being retried";
 let hasConnectedBefore = false;
-let appServerInitializationRevision = 0;
+let hasConnectionFailed = false;
+let hasReconnected = false;
+let connectionWatchdog: ConnectionWatchdog | null = null;
 let reconnectRecoveryTimeoutId: number | null = null;
-let cachedAppServerInitializedMessage: Record<string, unknown> | null = null;
+const reconnectRecovery = new ReconnectRecovery();
+const rpcLifecycle = new RpcLifecycle(
+  (event) => emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [event]),
+  (id, error) => {
+    const pending = pendingInvokes.get(id);
+    pendingInvokes.delete(id);
+    const queued = outboundQueue.findIndex(
+      (message) =>
+        message.type === "ipc-renderer-invoke" && message.requestId === id,
+    );
+    if (queued !== -1) outboundQueue.splice(queued, 1);
+    if (error) pending?.reject(error);
+    else pending?.resolve(undefined);
+  },
+);
 
 function scheduleReconnectRecovery(): void {
   if (reconnectRecoveryTimeoutId !== null) {
     window.clearTimeout(reconnectRecoveryTimeoutId);
   }
-  const expectedRevision = appServerInitializationRevision;
+  const expectedSocket = socket;
   reconnectRecoveryTimeoutId = window.setTimeout(() => {
     reconnectRecoveryTimeoutId = null;
     if (
       !socket ||
       socket.readyState !== WebSocket.OPEN ||
-      appServerInitializationRevision !== expectedRevision ||
-      cachedAppServerInitializedMessage === null
+      socket !== expectedSocket
     ) {
       return;
     }
     console.info(
       "[electron-stub] IPC bridge reconnected; triggering app-server recovery",
     );
-    emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [
-      cachedAppServerInitializedMessage,
-    ]);
+    for (const event of reconnectRecovery.pending()) {
+      emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [event]);
+    }
   }, 2_000);
 }
 
@@ -216,23 +238,32 @@ export function emitRendererEvent(channel: string, args: unknown[]): void {
 }
 
 function handleIncomingMessage(message: MainToRendererMessage): void {
+  if (message.type === "bridge-pong") {
+    connectionWatchdog?.pong(message.requestId);
+    return;
+  }
   if (message.type === "ipc-main-event") {
     if (message.channel === MESSAGE_FOR_VIEW_CHANNEL) {
       const payload = message.args[0];
+      reconnectRecovery.observe(payload);
       if (
+        hasReconnected &&
         isRecord(payload) &&
-        payload.type === "codex-app-server-initialized" &&
-        payload.hostId === "local"
-      ) {
-        cachedAppServerInitializedMessage = payload;
-        appServerInitializationRevision += 1;
-      }
+        payload.type === "codex-app-server-connection-changed" &&
+        payload.state === "connected"
+      )
+        scheduleReconnectRecovery();
     }
     emitRendererEvent(message.channel, message.args);
     return;
   }
 
   if (message.type === "ipc-renderer-invoke-result") {
+    if (
+      !message.ok &&
+      rpcLifecycle.fail(message.requestId, "Request delivery failed.")
+    )
+      return;
     const pending = pendingInvokes.get(message.requestId);
     if (!pending) {
       return;
@@ -276,17 +307,28 @@ function flushOutboundQueue(): void {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     return;
   }
-  for (const message of outboundQueue.splice(0)) {
-    socket.send(JSON.stringify(message));
+  while (outboundQueue.length && socket?.readyState === WebSocket.OPEN) {
+    const message = outboundQueue.shift()!;
+    try {
+      socket.send(JSON.stringify(message));
+      if (message.type === "ipc-renderer-invoke")
+        rpcLifecycle.sent(message.requestId);
+    } catch {
+      forceReconnect();
+      return;
+    }
   }
 }
 
 function failPendingRequests(reason: Error): void {
+  hasConnectionFailed = true;
   const retained = outboundQueue.filter(
     (message) => message.type === "ipc-renderer-send",
   );
   outboundQueue.length = 0;
   outboundQueue.push(...retained);
+
+  rpcLifecycle.disconnect();
 
   for (const pending of pendingInvokes.values()) {
     pending.reject(reason);
@@ -330,11 +372,29 @@ function forceReconnect(): void {
   const previousSocket = socket;
   if (previousSocket) {
     socket = null;
+    connectionWatchdog?.stop();
+    connectionWatchdog = null;
     closeMessagePorts();
     failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
     previousSocket.close();
   }
   reconnectNow();
+}
+
+function probeConnection(): void {
+  rpcLifecycle.expire();
+  if (connectionWatchdog && !connectionWatchdog.check()) return;
+  reconnectNow();
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  const currentSocket = socket;
+  const requestId = nextRequestId();
+  connectionWatchdog?.probe(requestId, () => {
+    try {
+      currentSocket.send(JSON.stringify({ type: "bridge-ping", requestId }));
+    } catch {
+      forceReconnect();
+    }
+  });
 }
 
 function maybeProbeAuthFailure(): void {
@@ -374,6 +434,10 @@ function ensureSocket(): void {
     `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/__backend/ipc`,
   );
   socket = currentSocket;
+  connectionWatchdog = new ConnectionWatchdog(() => {
+    if (socket !== currentSocket) return;
+    forceReconnect();
+  });
   let opened = false;
 
   currentSocket.addEventListener("open", () => {
@@ -381,6 +445,8 @@ function ensureSocket(): void {
       return;
     }
     opened = true;
+    connectionWatchdog?.opened();
+    reconnectRecovery.begin();
     reconnectAttempt = 0;
     consecutiveConnectFailures = 0;
     // The server releases this socket's Desktop references on disconnect.
@@ -401,7 +467,15 @@ function ensureSocket(): void {
       }
     }
     flushOutboundQueue();
+    if (socket !== currentSocket || currentSocket.readyState !== WebSocket.OPEN)
+      return;
     if (hasConnectedBefore) {
+      hasReconnected = true;
+      // A host can reconnect while this tab is absent. Ask Desktop for its
+      // current connection/initialization snapshots before replaying recovery.
+      void invokeMain(SHARED_OBJECT_CHANNEL, [{ type: "ready" }]).catch(
+        () => {},
+      );
       scheduleReconnectRecovery();
     }
     hasConnectedBefore = true;
@@ -425,6 +499,8 @@ function ensureSocket(): void {
       return;
     }
     socket = null;
+    connectionWatchdog?.stop();
+    connectionWatchdog = null;
     if (!opened) {
       consecutiveConnectFailures += 1;
       maybeProbeAuthFailure();
@@ -437,6 +513,8 @@ function ensureSocket(): void {
     if (socket !== currentSocket) {
       return;
     }
+    // A failed browser handshake may stay CONNECTING until its close callback.
+    // The watchdog bounds it even when that callback never arrives.
     scheduleReconnect();
   });
 }
@@ -457,6 +535,14 @@ function invokeMain(channel: string, args: unknown[]): Promise<unknown> {
   const requestId = nextRequestId();
   return new Promise((resolve, reject) => {
     pendingInvokes.set(requestId, { resolve, reject });
+    const isRpc = rpcLifecycle.track(requestId, channel, args);
+    if (isRpc && hasConnectionFailed && socket?.readyState !== WebSocket.OPEN) {
+      rpcLifecycle.fail(
+        requestId,
+        "Connection is being restored. Please retry when connected.",
+      );
+      return;
+    }
     enqueueMessage({
       type: "ipc-renderer-invoke",
       requestId,
@@ -535,6 +621,9 @@ const themeMediaQuery = matchMedia("(prefers-color-scheme: dark)");
 const mobileMediaQuery = matchMedia("(max-width: 768px)");
 const initialSidebarState = !mobileMediaQuery.matches;
 const electronShim = (window.__ELECTRON_SHIM__ ??= {});
+electronShim.appServerRequestLifecycle = (event) =>
+  rpcLifecycle.onLifecycle(event);
+electronShim.isTransportFailure = isTransportFailure;
 electronShim.imageDrafts = imageDrafts;
 electronShim.wrapBrowserServices = wrapBrowserServices;
 electronShim.downloadErrorMessage = downloadErrorMessage;
@@ -757,10 +846,13 @@ ensureSocket();
 installBrowserFileUploadBridge();
 installMobileViewportGuard();
 
-window.addEventListener("online", forceReconnect);
+window.addEventListener("online", probeConnection);
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) probeConnection();
+});
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
-    reconnectNow();
+    probeConnection();
   }
 });
 

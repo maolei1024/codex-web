@@ -58,6 +58,7 @@ const MAX_MISSED_PONGS = 2;
 const MAX_WEBSOCKET_PAYLOAD_BYTES = 64 * MEBIBYTE;
 
 type RendererToMainMessage =
+  | { type: "bridge-ping"; requestId: string }
   | {
       type: "ipc-renderer-invoke";
       requestId: string;
@@ -92,6 +93,7 @@ type RendererToMainMessage =
     };
 
 type MainToRendererMessage =
+  | { type: "bridge-pong"; requestId: string }
   | {
       type: "ipc-main-event";
       channel: string;
@@ -825,6 +827,21 @@ export async function startIpcBridgeServer(
         message = JSON.parse(String(rawData)) as RendererToMainMessage;
       } catch (error) {
         console.error("[ipc-bridge] invalid JSON payload", error);
+        return;
+      }
+
+      if (message.type === "bridge-ping") {
+        if (
+          typeof message.requestId === "string" &&
+          message.requestId.length <= 128
+        ) {
+          socket.send(
+            JSON.stringify({
+              type: "bridge-pong",
+              requestId: message.requestId,
+            }),
+          );
+        }
         return;
       }
 

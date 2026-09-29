@@ -42,6 +42,18 @@ not accumulate subscriptions or queue unused configuration ahead of history.
 The browser restores active subscriptions on reconnect before flushing pending
 subscription changes, including after failed connection attempts.
 
+The Web bridge tracks app-server requests through their actual replies, separately
+from IPC acknowledgements. Disconnects reject pending requests so the composer can
+release its submission lock and retain the draft. Configuration reads are bounded
+to 30 seconds (or an existing shorter deadline); this does not impose a timeout on
+long-running commands or model work. Failed configuration preparation cancels the
+pending send instead of submitting it later. Requests that may already have reached
+the server report an unknown outcome and are never automatically replayed.
+Returning to the foreground checks the existing WebSocket with a five-second
+liveness probe. Reconnection restores subscriptions and refreshes local and remote
+conversation state. Existing tabs need one refresh after a Web release to load its
+new bridge; the application does not force reloads while users are editing.
+
 Unsent image attachments are saved in this browser's IndexedDB alongside the
 existing text draft behavior. Refreshing restores the images to the same task's
 composer (including the new-task composer). Original image data is retained, so

@@ -82,6 +82,35 @@ function closeWebSocket(socket) {
   });
 }
 
+test("authenticated liveness replies stay on the requesting socket and bypass Desktop", async () => {
+  const app = await startIpcBridgeServer(options(), {
+    launchDesktopApp: false,
+  });
+  const url = `ws://127.0.0.1:${app.server.address().port}/__backend/ipc`;
+  let a, b;
+  try {
+    assert.equal(await rejectedWebSocketStatus(url), 401);
+    a = await openWebSocket(`${url}?token=${TOKEN}`);
+    b = await openWebSocket(`${url}?token=${TOKEN}`);
+    const other = [];
+    b.on("message", (data) => other.push(JSON.parse(data)));
+    const reply = new Promise((resolve) =>
+      a.once("message", (data) => resolve(JSON.parse(data))),
+    );
+    a.send(JSON.stringify({ type: "bridge-ping", requestId: "liveness" }));
+    assert.deepEqual(await reply, {
+      type: "bridge-pong",
+      requestId: "liveness",
+    });
+    await new Promise((resolve) => b.ping("barrier", resolve));
+    assert.equal(other.length, 0);
+  } finally {
+    if (a) await closeWebSocket(a);
+    if (b) await closeWebSocket(b);
+    await app.close();
+  }
+});
+
 test("shared objects stay within subscribing tabs and disconnect releases references", async () => {
   const bridge = (globalThis.__codexElectronIpcBridge ??= {});
   const previousHandler = bridge.handleRendererInvoke;

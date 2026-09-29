@@ -1,0 +1,91 @@
+--- a/webview/assets/app-initial-236e1501144c.js
++++ b/webview/assets/app-initial-236e1501144c.js
+@@ -1759,6 +1759,7 @@
+           if (n?.sendMessageFromView) {
+             let r = e;
+             (n.sendMessageFromView(r).catch((t) => {
++              if (window.__ELECTRON_SHIM__?.isTransportFailure?.(t)) return;
+               r.type !== `log-message` &&
+                 T.warning(`Failed to send message from view`, {
+                   safe: { type: r.type },
+@@ -177246,6 +177247,7 @@
+             }));
+         }
+         emitRequestLifecycleEvent(e) {
++          window.__ELECTRON_SHIM__?.appServerRequestLifecycle?.(e);
+           for (let t of this.requestLifecycleListeners)
+             try {
+               t(e);
+@@ -182392,6 +182394,7 @@
+       try {
+         return await qD(e, t, n, r, !0);
+       } catch (e) {
++        if (window.__ELECTRON_SHIM__?.isTransportFailure?.(e)) throw e;
+         return (
+           T.error(`Failed to load layered config`, {
+             safe: {},
+@@ -182401,6 +182404,7 @@
+         );
+       }
+     },
++    retry: false,
+     staleTime: pD.FIVE_MINUTES,
+   });
+ }
+@@ -182413,6 +182417,7 @@
+         { includeLayers: i, cwd: r },
+         { ...oEn() },
+       ),
++    retry: false,
+     staleTime: 0,
+   });
+ }
+@@ -182423,7 +182428,7 @@
+   return {
+     queryKey: Skn({ authMethod: t, failClosed: n, hostId: r }),
+     queryFn: () => wkn(e, r),
+-    ...(n ? { retry: !1 } : {}),
++    retry: false,
+     refetchInterval: pD.FIVE_MINUTES,
+     refetchIntervalInBackground: !0,
+     refetchOnWindowFocus: `always`,
+--- a/webview/assets/app-primary-6b28e06666ff.js
++++ b/webview/assets/app-primary-6b28e06666ff.js
+@@ -399164,7 +399164,14 @@
+         let t = () => {
+           u.current.delete(e);
+         };
+-        i().then(t, t);
++        const pendingSubmit = c.current;
++        i().then(t, () => {
++          t();
++          if (c.current === pendingSubmit) {
++            c.current = null;
++            f(false);
++          }
++        });
+       }),
+       (t[1] = r),
+       (t[2] = i),
+@@ -399273,7 +399280,11 @@
+     : (f = t[2]);
+   let p;
+   t[3] !== i || t[4] !== a || t[5] !== l
+-    ? ((p = () => yXr(l, a, i).catch(kXr)),
++    ? ((p = () => yXr(l, a, i).catch((error) => {
++        kXr(error);
++        l.get(Ex).danger($f(error));
++        throw error;
++      })),
+       (t[3] = i),
+       (t[4] = a),
+       (t[5] = l),
+@@ -399446,7 +399457,7 @@
+           submitButtonMode: t.submitButtonMode,
+           submitTarget: n,
+         });
+-      })().finally(() => {
++      })().catch((error) => e.handleSubmitError(error)).finally(() => {
+         (r.set(PD, !1), s());
+       });
+     }),
