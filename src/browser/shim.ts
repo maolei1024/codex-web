@@ -228,6 +228,7 @@ const rpcLifecycle = new RpcLifecycle(
     else pending?.resolve(undefined);
   },
 );
+appHostRecovery.onDisconnected(() => rpcLifecycle.disconnect());
 
 function scheduleReconnectRecovery(): void {
   if (reconnectRecoveryTimeoutId !== null) {

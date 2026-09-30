@@ -66,6 +66,9 @@ replayed. Required configuration errors remain errors, with a retry notice outsi
 the React tree. Recovery retains the route, rendered history, editor and attachments;
 it does not remount the app or simulate a page refresh. Each browser channel owns its
 callback lifetime, so closing one tab cannot unregister another tab's callbacks.
+An internal AppHost disconnect also rejects pending native app-server requests,
+even while its WebSocket is open. Conversation resume reads have the same bounded
+wait; an old zero-timeout resume cannot trap later recovery behind its Promise.
 The native startup gate also reacquires readiness after recovery. An expired startup
 Promise must not trap React on its error page after a slow module download. A healthy
 root retains its editor; only a failed transport error boundary is reset.

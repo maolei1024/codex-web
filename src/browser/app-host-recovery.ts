@@ -104,6 +104,7 @@ export class AppHostRecovery {
   private events: RecoveryEvent[] = [];
   private stages: Record<string, { state: string; at: number }> = {};
   private onRestore = new Set<() => void>();
+  private onDisconnect = new Set<() => void>();
   private facade: any;
   private changed?: (state: string, method: string) => void;
   private recoveryNeeded?: () => void;
@@ -137,6 +138,12 @@ export class AppHostRecovery {
     this.onRestore.add(callback);
     return () => {
       this.onRestore.delete(callback);
+    };
+  }
+  onDisconnected(callback: () => void): () => void {
+    this.onDisconnect.add(callback);
+    return () => {
+      this.onDisconnect.delete(callback);
     };
   }
   diagnostics() {
@@ -389,6 +396,10 @@ export class AppHostRecovery {
     if (!this.exhausted) this.beginCycle();
     // Invalidate callbacks before native abort can flush any final messages.
     if (old) this.generation++;
+    // The WebSocket can remain open when only AppHost's MessagePort retires.
+    // Native app-server replies are a separate lifetime from the IPC ACK;
+    // settle them too, before the next session can reuse a pending resume.
+    for (const callback of this.onDisconnect) callback();
     for (const request of [...this.pending])
       request.fail(new RecoveryError("services", reason));
     old?.close();

@@ -22,6 +22,7 @@ const STARTUP_READS = new Set([
   "account/read",
   "thread/list",
   "thread/read",
+  "thread/resume",
 ]);
 
 export function isTransportFailure(error: unknown): boolean {
