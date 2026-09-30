@@ -5,7 +5,7 @@
          }
          async sendRequest(e, t, n) {
 +          return window.__ELECTRON_SHIM__.appHost.nativeRequest(e,
-+            timeoutMs => this.sendRequestOnce(e, t, timeoutMs == null ? n : { ...n, timeoutMs: Math.min(n?.timeoutMs > 0 ? n.timeoutMs : Infinity, timeoutMs) }));
++            timeoutMs => this.sendRequestOnce(e, t, timeoutMs == null ? n : { ...n, priority: "critical", timeoutMs: Math.min(n?.timeoutMs > 0 ? n.timeoutMs : Infinity, timeoutMs) }));
 +        }
 +        async sendRequestOnce(e, t, n) {
            if (this.dispatchMessage == null)

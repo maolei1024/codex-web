@@ -71,6 +71,10 @@ Promise must not trap React on its error page after a slow module download. A he
 root retains its editor; only a failed transport error boundary is reset.
 Unrelated background HTTP and user writes do not hold the startup readiness gate;
 required reads remain bounded and diagnostic counts distinguish the two.
+During startup and recovery, those reads use Desktop's reserved critical request
+capacity so long background work cannot starve configuration and history. Native
+queue expiration/full errors use the same bounded read retries; writes keep their
+original priority and are never replayed.
 After readiness, routine reads and subscriptions do not start another recovery
 deadline. Background application errors return to their callers; a real transport
 failure starts recovery. This prevents an idle tab from disconnecting itself one

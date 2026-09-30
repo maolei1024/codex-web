@@ -228,7 +228,23 @@ export class AppHostRecovery {
       try {
         return await operation(Math.min(15_000, cycle.deadline - this.now()));
       } catch (error) {
+        const failure = error as {
+          code?: unknown;
+          jsonRpcCode?: unknown;
+          message?: string;
+        };
+        // These native scheduler errors mean the read was never dispatched.
+        // They share the same finite recovery budget as a lost reply, rather
+        // than making a temporary full queue permanently fail initialization.
+        const queued =
+          (failure?.code ?? failure?.jsonRpcCode) === -32001 &&
+          [
+            "App server request expired while queued",
+            "App server request queue is full",
+            "App server coalesced request queue is full",
+          ].includes(failure?.message ?? "");
         if (
+          queued ||
           (error as Error)?.name === "CodexWebTransportError" ||
           (error as Error)?.name === "AppServerRequestDeliveryError" ||
           (error as Error)?.name === "AppServerRequestTimeoutError"
