@@ -44,8 +44,8 @@ subscription changes, including after failed connection attempts.
 
 The Web bridge tracks app-server requests through their actual replies, separately
 from IPC acknowledgements. Disconnects reject pending requests so the composer can
-release its submission lock and retain the draft. Configuration reads are bounded
-to 30 seconds (or an existing shorter deadline); this does not impose a timeout on
+release its submission lock and retain the draft. Startup/configuration reads are bounded
+to 15 seconds (or an existing shorter deadline); this does not impose a timeout on
 long-running commands or model work. Failed configuration preparation cancels the
 pending send instead of submitting it later. Requests that may already have reached
 the server report an unknown outcome and are never automatically replayed.
@@ -53,6 +53,33 @@ Returning to the foreground checks the existing WebSocket with a five-second
 liveness probe. Reconnection restores subscriptions and refreshes local and remote
 conversation state. Existing tabs need one refresh after a Web release to load its
 new bridge; the application does not force reloads while users are editing.
+
+AppHost recovery replaces the native RPC session, service references and subscriptions
+for each connection generation. A closed channel sends the native termination signal,
+settles callers and ignores late replies. Initialization and explicitly listed reads
+have at most two retries, after one and three seconds, within a shared 60-second
+deadline; foreground recovery checks wall-clock deadlines. Ordinary writes are not
+replayed. Required configuration errors remain errors, with a retry notice outside
+the React tree. Recovery retains the route, rendered history, editor and attachments;
+it does not remount the app or simulate a page refresh. Each browser channel owns its
+callback lifetime, so closing one tab cannot unregister another tab's callbacks.
+
+The display-only conversation-detail setting waits at most one second for identity
+and feature assignments, then uses Desktop's existing unavailable-value semantics.
+The outstanding backend read is shared; late updates still check the identity epoch
+and publication. Authentication, permissions and model availability use their actual
+results. Settings reads are traced through receipt, dependency completion and reply.
+Browser diagnostics are available via `window.__ELECTRON_SHIM__.diagnostics()`;
+authenticated `/__backend/diagnostics` reports server channel counts and bounded
+startup events. Events contain methods, phases, durations and counts, never request
+arguments, messages, drafts, credentials or feature-assignment payloads.
+
+Tests exercise the pinned extracted RPC transports and request client, including
+timeouts, late replies, subscription restoration and concurrent tabs. The image smoke
+test performs a real AppHost handshake and settings read. Browser acceptance must
+check actual history text, projects and required configuration; an input box or open
+WebSocket alone does not establish readiness. Cold asset transfer and large histories
+are measured separately from warm small-history reloads.
 
 Unsent image attachments are saved in this browser's IndexedDB alongside the
 existing text draft behavior. Refreshing restores the images to the same task's
@@ -63,6 +90,10 @@ on every text keystroke. If browser storage is unavailable or full, an alert
 appears. Draft images stay on this browser and origin: they are not synced across
 devices and are removed when site data is cleared. Files still being read or
 uploaded when the page is interrupted may not yet have a saved draft.
+Draft saves expose a success/failure result, including incomplete attachments, and
+IndexedDB operations have a bounded wait. Storage failure never causes recovery to
+unmount the editor. After a subsequent release, a reconnect can show an update notice;
+the user retains control over when to save attachments and refresh.
 
 https://github.com/user-attachments/assets/0a33cbd8-741c-412c-9e75-46dfe9324596
 

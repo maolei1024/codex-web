@@ -14,7 +14,15 @@ type PendingRpc = {
   timer?: ReturnType<typeof setTimeout>;
 };
 
-const CONFIG_READ_TIMEOUT_MS = 30_000;
+const CONFIG_READ_TIMEOUT_MS = 15_000;
+const STARTUP_READS = new Set([
+  "config/read",
+  "configRequirements/read",
+  "model/list",
+  "account/read",
+  "thread/list",
+  "thread/read",
+]);
 
 export function isTransportFailure(error: unknown): boolean {
   return (
@@ -58,9 +66,7 @@ export class RpcLifecycle {
     if (channel !== "codex_desktop:message-from-view") return false;
     const message = rpcMessage(args[0]);
     if (!message) return false;
-    const bounded =
-      message.request.method === "config/read" ||
-      message.request.method === "configRequirements/read";
+    const bounded = STARTUP_READS.has(message.request.method);
     const timeout =
       typeof message.timeoutMs === "number" && message.timeoutMs > 0
         ? Math.min(message.timeoutMs, CONFIG_READ_TIMEOUT_MS)

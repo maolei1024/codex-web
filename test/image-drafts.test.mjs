@@ -132,7 +132,14 @@ test("storage errors preserve live attachments and report failure without unhand
   const drafts = createImageDrafts(storage, () => {
     errors++;
   });
-  await drafts.save("task", [{ ...image, id: "new" }]);
+  assert.deepEqual(await drafts.save("task", [{ ...image, id: "new" }]), {
+    ok: false,
+    reason: "storage",
+  });
+  assert.deepEqual(await drafts.checkpoint("task"), {
+    ok: false,
+    reason: "storage",
+  });
   assert.equal(errors, 1);
   assert.equal(storage.rows.size, 0, "failed saves must not revive old images");
   storage.read = async () => {
@@ -145,6 +152,17 @@ test("storage errors preserve live attachments and report failure without unhand
   );
   await tick();
   assert.equal(errors, 2);
+});
+
+test("draft checkpoint reports attachments that are still being read", async () => {
+  const drafts = createImageDrafts(memoryStorage());
+  assert.deepEqual(
+    await drafts.save("task", [{ id: "pending", src: "blob:reading" }]),
+    { ok: false, reason: "incomplete" },
+  );
+  assert.equal((await drafts.checkpoint("task")).ok, false);
+  assert.equal((await drafts.save("task", [image])).ok, true);
+  assert.equal((await drafts.checkpoint("task")).ok, true);
 });
 
 test("Desktop composer mutations save images only when changed, including send/reset", async () => {

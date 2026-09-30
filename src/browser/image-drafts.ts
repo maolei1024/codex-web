@@ -13,6 +13,9 @@ export type ImageDraftStorage = {
   read(key: string): Promise<unknown>;
   write(key: string, images: DraftImage[]): Promise<void>;
 };
+export type DraftSaveResult =
+  | { ok: true }
+  | { ok: false; reason: "storage" | "incomplete" };
 
 // Keep the original pixels, not blob URLs, expiring upload paths or cloud IDs.
 // Desktop can send inline images locally/remotely and re-upload them for Cloud.
@@ -48,13 +51,29 @@ export function indexedDBImageDraftStorage(
   function open(): Promise<IDBDatabase> {
     return (opening ??= new Promise<IDBDatabase>((resolve, reject) => {
       const request = factory().open("codex-web-image-drafts", 1);
+      let expired = false;
+      const timer = setTimeout(() => {
+        expired = true;
+        reject(new Error("Image draft storage open timed out"));
+      }, 3_000);
       request.onupgradeneeded = () =>
         request.result.createObjectStore("drafts");
-      request.onerror = () => reject(request.error);
-      request.onblocked = () =>
+      request.onerror = () => {
+        clearTimeout(timer);
+        reject(request.error);
+      };
+      request.onblocked = () => {
+        clearTimeout(timer);
+        expired = true;
         reject(new Error("Image draft storage is blocked"));
+      };
       request.onsuccess = () => {
+        clearTimeout(timer);
         const db = request.result;
+        if (expired) {
+          db.close();
+          return;
+        }
         db.onversionchange = () => {
           db.close();
           opening = undefined;
@@ -73,15 +92,23 @@ export function indexedDBImageDraftStorage(
     const db = await open();
     return new Promise((resolve, reject) => {
       const tx = db.transaction("drafts", images ? "readwrite" : "readonly");
+      const timer = setTimeout(() => {
+        tx.abort();
+      }, 3_000);
       const store = tx.objectStore("drafts");
       const request = images
         ? images.length
           ? store.put(images, key)
           : store.delete(key)
         : store.get(key);
-      tx.oncomplete = () => resolve(request.result);
-      tx.onabort = () =>
+      tx.oncomplete = () => {
+        clearTimeout(timer);
+        resolve(request.result);
+      };
+      tx.onabort = () => {
+        clearTimeout(timer);
         reject(tx.error ?? new Error("Image draft transaction aborted"));
+      };
       tx.onerror = () => {}; // onabort reports failed transactions, not just requests.
     });
   }
@@ -98,26 +125,42 @@ export function createImageDrafts(
   onError: () => void = () => {},
 ) {
   const revisions = new Map<string, number>();
-  const writes = new Map<string, Promise<void>>();
+  const writes = new Map<string, Promise<DraftSaveResult>>();
+  const results = new Map<string, DraftSaveResult>();
   return {
-    save(key: string, images: DraftImage[]): Promise<void> {
+    save(key: string, images: DraftImage[]): Promise<DraftSaveResult> {
       revisions.set(key, (revisions.get(key) ?? 0) + 1);
       const snapshot = durableImages(images);
       // Serialize per composer so a slow older save cannot resurrect a deletion.
-      const pending = (writes.get(key) ?? Promise.resolve()).then(async () => {
-        try {
-          await storage.write(key, snapshot);
-        } catch {
-          // A quota failure must not leave an older, removed attachment as a draft.
-          await storage.write(key, []).catch(() => {});
-          onError();
-        }
-      });
+      const pending = (writes.get(key) ?? Promise.resolve()).then(
+        async (): Promise<DraftSaveResult> => {
+          try {
+            await storage.write(key, snapshot);
+            const result: DraftSaveResult =
+              snapshot.length === images.length
+                ? { ok: true }
+                : { ok: false, reason: "incomplete" };
+            results.set(key, result);
+            return result;
+          } catch {
+            // A quota failure must not leave an older, removed attachment as a draft.
+            await storage.write(key, []).catch(() => {});
+            onError();
+            const result: DraftSaveResult = { ok: false, reason: "storage" };
+            results.set(key, result);
+            return result;
+          }
+        },
+      );
       writes.set(key, pending);
       void pending.finally(() => {
         if (writes.get(key) === pending) writes.delete(key);
       });
       return pending;
+    },
+    async checkpoint(key: string): Promise<DraftSaveResult> {
+      await writes.get(key);
+      return results.get(key) ?? { ok: true };
     },
     mount(
       key: string,

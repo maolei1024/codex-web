@@ -17,6 +17,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import fastifyMultipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import { installModuleAliasHook } from "./module";
+import { startupRecovery } from "./startup-recovery";
 import { glob } from "glob";
 import {
   assertTokenRequirement,
@@ -184,6 +185,9 @@ class WebSocketMessagePort implements BridgedMessagePort {
   }
 
   start(): void {}
+  isClosed(): boolean {
+    return this.closed;
+  }
 
   close(): void {
     if (!this.markClosed()) {
@@ -193,6 +197,8 @@ class WebSocketMessagePort implements BridgedMessagePort {
       type: "message-port-close",
       portId: this.portId,
     });
+    this.emit("close");
+    this.listeners.clear();
   }
 
   receiveMessage(data: unknown): void {
@@ -213,6 +219,7 @@ class WebSocketMessagePort implements BridgedMessagePort {
       return;
     }
     this.emit("close");
+    this.listeners.clear();
   }
 
   private emit(event: string, ...args: unknown[]): void {
@@ -582,6 +589,7 @@ export async function startIpcBridgeServer(
     },
   });
   const sockets = new Set<WebSocket>();
+  const portCounts = new Map<WebSocket, Map<string, WebSocketMessagePort>>();
   const missedPings = new Map<WebSocket, number>();
   // Desktop sees a single renderer. Balance its reference-counted subscriptions
   // across browser sockets, including sockets lost during refresh/reconnect.
@@ -687,6 +695,27 @@ export async function startIpcBridgeServer(
   app.get("/", async (_request, reply) => {
     return reply.sendFile("index.html");
   });
+  app.get("/__backend/diagnostics", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return {
+      buildId: assetVersion,
+      connections: sockets.size,
+      ports: [...portCounts.values()].reduce(
+        (sum, ports) => sum + ports.size,
+        0,
+      ),
+      bufferedBytes: [...sockets].reduce(
+        (sum, socket) => sum + socket.bufferedAmount,
+        0,
+      ),
+      startup: startupRecovery.diagnostics(),
+    };
+  });
+  app.get("/__backend/version", async (_request, reply) => {
+    return reply
+      .header("Cache-Control", "no-store")
+      .send({ buildId: assetVersion });
+  });
 
   app.setNotFoundHandler((request, reply) => {
     if (request.url.startsWith("/@fs/") || request.url.startsWith("/assets/")) {
@@ -776,6 +805,7 @@ export async function startIpcBridgeServer(
     socket.on("error", () => {});
 
     const messagePorts = new Map<string, WebSocketMessagePort>();
+    portCounts.set(socket, messagePorts);
     const dispatchPostMessage = (
       channel: string,
       message: unknown,
@@ -801,6 +831,7 @@ export async function startIpcBridgeServer(
 
     socket.on("close", () => {
       sockets.delete(socket);
+      portCounts.delete(socket);
       missedPings.delete(socket);
       sharedObjectSubscriptions.delete(socket);
       for (const [key, count] of subscriptions) {

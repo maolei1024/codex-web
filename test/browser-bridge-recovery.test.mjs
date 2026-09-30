@@ -16,6 +16,7 @@ const modules = Object.fromEntries(
       "connection-watchdog",
       "shared-object-subscriptions",
       "reconnect",
+      "app-host-recovery",
     ].map(async (name) => [
       `./${name}`,
       await importTypescriptModule(`src/browser/${name}.ts`),
@@ -114,6 +115,7 @@ function setup(t) {
           isLocalFilePickerMessage: () => false,
         },
         "./mobile-viewport": { installMobileViewportGuard() {} },
+        "./recovery-notice": { recoveryNotice() {}, checkForUpdate() {} },
       }[name] ??
       {},
   });

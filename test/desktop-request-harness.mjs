@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-export async function nativeRequestClient(dispatch, lifecycle = () => {}) {
+export async function nativeRequestClient(
+  dispatch,
+  lifecycle = () => {},
+  appHost = { nativeRequest: (_method, operation) => operation() },
+) {
   const source = await readFile(
     "scratch/asar/webview/assets/app-initial-236e1501144c.js",
     "utf8",
@@ -18,7 +22,7 @@ export async function nativeRequestClient(dispatch, lifecycle = () => {}) {
     window: {
       setTimeout,
       clearTimeout,
-      __ELECTRON_SHIM__: { appServerRequestLifecycle: lifecycle },
+      __ELECTRON_SHIM__: { appServerRequestLifecycle: lifecycle, appHost },
     },
     Date,
     DOMException,

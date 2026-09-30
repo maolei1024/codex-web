@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
 import { initializeContainer } from "/app/scripts/container-init.mjs";
+import { nativeAppHostRuntime } from "./desktop-app-host-harness.mjs";
 
 const require = createRequire("/app/package.json");
 assert.equal(require("/app/src/server/electron/index.js").net.isOnline(), true);
@@ -76,10 +77,44 @@ try {
     });
     sendRequest();
   });
-  socket.close();
+  // Exercise the same extracted RPC engine as Chrome, not merely IPC thread/list.
+  const rpc = await nativeAppHostRuntime();
+  const { port1, port2 } = new MessageChannel();
+  port2.start();
+  port2.on("message", data => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "message-port-message", portId: "smoke-host", data }));
+  });
+  const route = raw => {
+    const envelope = JSON.parse(raw);
+    if (envelope.portId !== "smoke-host") return;
+    if (envelope.type === "message-port-message") port2.postMessage(envelope.data);
+    if (envelope.type === "message-port-close") port2.postMessage(null);
+  };
+  socket.on("message", route);
+  const view = new class extends rpc.Target {
+    get services() { return { appUpdates: { stateChanged() {} }, downloads: { stateChanged() {} }, clientCoordination: {} }; }
+  }();
+  const host = rpc.connect(port1, view);
+  socket.send(JSON.stringify({ type: "ipc-renderer-post-message", channel: "codex_desktop:connect-app-host", message: {}, portIds: ["smoke-host"] }));
+  let settingsTimer;
+  try {
+    const settings = await Promise.race([
+      (async () => { const services = await host.services; return await services.settings.readAll(); })(),
+      new Promise((_, reject) => { settingsTimer = setTimeout(() => reject(new Error("AppHost settings timeout")), 15_000); }),
+    ]);
+    assert.ok(settings.values && settings.configuredValues, "AppHost must return native settings");
+    assert.ok(Object.keys(settings.values).length > 0);
+  } finally {
+    clearTimeout(settingsTimer);
+    host[Symbol.dispose]();
+    await delay(50);
+    port1.close(); port2.close();
+    socket.off("message", route);
+    socket.close();
+  }
   await delay(2000);
   assert.equal(child.exitCode, null, "Desktop bridge must remain running");
-  console.log(`Container smoke passed: ${process.arch}, native addons, authentication, WebSocket, Desktop startup`);
+  console.log(`Container smoke passed: ${process.arch}, native addons, authentication, WebSocket, AppHost settings, Desktop startup`);
 } catch (error) {
   console.error(diagnosticOutput);
   throw error;

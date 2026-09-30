@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 type StubFunction = (...args: unknown[]) => unknown;
 type StubListener = (...args: unknown[]) => void;
 type StubMessagePort = {
+  isClosed?: () => boolean;
   close: () => void;
   on: (event: string, listener: StubListener) => unknown;
   postMessage: (message: unknown) => void;
@@ -194,11 +195,55 @@ const rendererWebContents: StubWebContents = {
   },
 };
 
+let appHostSessionSequence = 0;
 function createIpcMainEvent(ports: StubMessagePort[] = []): IpcMainEvent {
-  const sender =
+  const originalSender =
     (BrowserWindow.fromWebContents(rendererWebContents)
       ?.webContents as unknown as StubWebContents | undefined) ??
     rendererWebContents;
+  // Each AppHost has its own lifetime while retaining the native primary-window
+  // identity. Destroying one browser channel must not destroy the shared window.
+  const port = ports[0];
+  const sessionId = port
+    ? `web-app-host-${++appHostSessionSequence}`
+    : undefined;
+  const listeners = new Set<StubListener>();
+  let closed = port?.isClosed?.() ?? false;
+  const sender = port
+    ? new Proxy(originalSender, {
+        get(target, key) {
+          if (key === "__codexWebSessionId") return sessionId;
+          if (key === "isDestroyed")
+            return () => closed || target.isDestroyed();
+          if (key === "once" || key === "on")
+            return (event: string, listener: StubListener) => {
+              if (event === "destroyed") {
+                if (!closed) listeners.add(listener);
+                return sender;
+              }
+              return target[key](event, listener);
+            };
+          if (key === "off" || key === "removeListener")
+            return (event: string, listener: StubListener) => {
+              if (event === "destroyed") {
+                listeners.delete(listener);
+                return sender;
+              }
+              return target[key](event, listener);
+            };
+          return Reflect.get(target, key, target);
+        },
+      })
+    : originalSender;
+  port?.on("close", () => {
+    closed = true;
+    for (const listener of [...listeners]) {
+      try {
+        listener();
+      } catch {}
+    }
+    listeners.clear();
+  });
   const event: IpcMainEvent = {
     returnValue: undefined,
     processId: 1,
@@ -245,6 +290,7 @@ function createIpcMainStub(): {
     message: unknown,
     ports: StubMessagePort[],
   ): void => {
+    if (ports.some((port) => port.isClosed?.())) return;
     if (registeredPostMessageChannels.has(channel)) {
       emitter.emit(channel, createIpcMainEvent(ports), message);
       return;
@@ -283,6 +329,7 @@ function createIpcMainStub(): {
       if (pending) {
         pendingPostMessages.delete(channel);
         for (const { message, ports } of pending) {
+          if (ports.some((port) => port.isClosed?.())) continue;
           emitter.emit(channel, createIpcMainEvent(ports), message);
         }
       }

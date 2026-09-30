@@ -34,6 +34,7 @@ RUN mkdir /data && chown node:node /data && usermod -d /data/home node
 USER node
 # Exercise the actual packaged application and target-native addons before push.
 RUN --mount=type=bind,source=.ci/smoke-container.mjs,target=/app/smoke-container.mjs \
+    --mount=type=bind,source=test/desktop-app-host-harness.mjs,target=/app/desktop-app-host-harness.mjs \
     node /app/smoke-container.mjs
 EXPOSE 8214
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/scripts/container-entrypoint"]

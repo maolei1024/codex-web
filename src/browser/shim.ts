@@ -14,6 +14,8 @@ import { reconnectDelayMs } from "./reconnect";
 import { RpcLifecycle, isTransportFailure } from "./rpc-lifecycle";
 import { ReconnectRecovery } from "./reconnect-recovery";
 import { ConnectionWatchdog } from "./connection-watchdog";
+import { AppHostRecovery, STARTUP_FETCH_READS } from "./app-host-recovery";
+import { recoveryNotice, checkForUpdate } from "./recovery-notice";
 import {
   SharedObjectSubscriptions,
   SHARED_OBJECT_CHANNEL,
@@ -124,6 +126,13 @@ type MemoryNavigationChange = {
 };
 
 type ElectronShimState = {
+  diagnostics?: () => unknown;
+  appHost?: AppHostRecovery;
+  configureAppHost?: (
+    factory: Parameters<AppHostRecovery["configure"]>[0],
+  ) => Promise<any>;
+  bootFailed?: (retry: () => void) => void;
+  registerQueryClient?: (client: any) => void;
   appServerRequestLifecycle?: RpcLifecycle["onLifecycle"];
   isTransportFailure?: typeof isTransportFailure;
   imageDrafts?: typeof imageDrafts;
@@ -173,6 +182,7 @@ const pendingDirectoryEntries = new Map<
 >();
 const rendererListeners = new Map<string, Set<IpcListener>>();
 const messagePorts = new Map<string, MessagePort>();
+const messagePortGenerations = new Map<string, number>();
 const MESSAGE_FOR_VIEW_CHANNEL = "codex_desktop:message-for-view";
 const AUTH_PROBE_FAILURE_INTERVAL = 5;
 const DISCONNECT_ERROR_MESSAGE =
@@ -183,6 +193,26 @@ let hasReconnected = false;
 let connectionWatchdog: ConnectionWatchdog | null = null;
 let reconnectRecoveryTimeoutId: number | null = null;
 const reconnectRecovery = new ReconnectRecovery();
+const appHostRecovery = new AppHostRecovery(Date.now, () =>
+  window.location.pathname.startsWith("/thread/"),
+);
+let retryBoot: (() => void) | undefined;
+let recoveringAppHost: Promise<void> | undefined;
+function recoverAppHost(manual = false): void {
+  if (recoveringAppHost) return;
+  recoveringAppHost = appHostRecovery
+    .recover(manual)
+    .then(() => {
+      retryBoot?.();
+      retryBoot = undefined;
+      reconnectRecovery.begin();
+      scheduleReconnectRecovery();
+    })
+    .catch(() => {})
+    .finally(() => {
+      recoveringAppHost = undefined;
+    });
+}
 const rpcLifecycle = new RpcLifecycle(
   (event) => emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [event]),
   (id, error) => {
@@ -278,14 +308,26 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
   }
 
   if (message.type === "message-port-message") {
+    if (
+      messagePortGenerations.get(message.portId) !== appHostRecovery.generation
+    )
+      return;
     messagePorts.get(message.portId)?.postMessage(message.data);
     return;
   }
 
   if (message.type === "message-port-close") {
     const port = messagePorts.get(message.portId);
+    if (!port) return; // A retired generation cannot disconnect its replacement.
+    const generation = messagePortGenerations.get(message.portId);
+    messagePortGenerations.delete(message.portId);
     messagePorts.delete(message.portId);
+    // null is the pinned native RPC transport's fatal-close sentinel.
+    port?.postMessage(null);
     port?.close();
+    if (generation !== appHostRecovery.generation) return;
+    appHostRecovery.disconnect();
+    recoverAppHost();
     return;
   }
 
@@ -342,12 +384,16 @@ function failPendingRequests(reason: Error): void {
 
 function closeMessagePorts(): void {
   for (const port of messagePorts.values()) {
+    port.postMessage(null);
     port.close();
   }
   messagePorts.clear();
+  messagePortGenerations.clear();
+  appHostRecovery.disconnect();
 }
 
 function scheduleReconnect(): void {
+  if (appHostRecovery.failed) return;
   if (reconnectTimeoutId !== null) {
     return;
   }
@@ -382,7 +428,9 @@ function forceReconnect(): void {
 }
 
 function probeConnection(): void {
+  appHostRecovery.checkDeadlines();
   rpcLifecycle.expire();
+  if (appHostRecovery.failed) return;
   if (connectionWatchdog && !connectionWatchdog.check()) return;
   reconnectNow();
   if (socket?.readyState !== WebSocket.OPEN) return;
@@ -409,10 +457,7 @@ function maybeProbeAuthFailure(): void {
     .then((response) => {
       if (response.status === 401) {
         clearStatsigSnapshots();
-        console.error(
-          "[electron-stub] IPC bridge auth rejected; reloading to show sign-in instructions",
-        );
-        window.location.reload();
+        appHostRecovery.authenticationFailed();
       }
     })
     .catch(() => {})
@@ -422,6 +467,7 @@ function maybeProbeAuthFailure(): void {
 }
 
 function ensureSocket(): void {
+  if (appHostRecovery.failed) return;
   if (
     socket &&
     (socket.readyState === WebSocket.OPEN ||
@@ -470,6 +516,7 @@ function ensureSocket(): void {
     if (socket !== currentSocket || currentSocket.readyState !== WebSocket.OPEN)
       return;
     if (hasConnectedBefore) {
+      void checkForUpdate(__CODEX_WEB_BUILD_ID__);
       hasReconnected = true;
       // A host can reconnect while this tab is absent. Ask Desktop for its
       // current connection/initialization snapshots before replaying recovery.
@@ -477,6 +524,7 @@ function ensureSocket(): void {
         () => {},
       );
       scheduleReconnectRecovery();
+      recoverAppHost();
     }
     hasConnectedBefore = true;
   });
@@ -621,10 +669,50 @@ const themeMediaQuery = matchMedia("(prefers-color-scheme: dark)");
 const mobileMediaQuery = matchMedia("(max-width: 768px)");
 const initialSidebarState = !mobileMediaQuery.matches;
 const electronShim = (window.__ELECTRON_SHIM__ ??= {});
-electronShim.appServerRequestLifecycle = (event) =>
+electronShim.appServerRequestLifecycle = (event) => {
   rpcLifecycle.onLifecycle(event);
+  appHostRecovery.observeNative(event);
+};
 electronShim.isTransportFailure = isTransportFailure;
 electronShim.imageDrafts = imageDrafts;
+electronShim.appHost = appHostRecovery;
+electronShim.diagnostics = () => ({
+  appHost: appHostRecovery.diagnostics(),
+  ports: messagePorts.size,
+  pendingInvokes: pendingInvokes.size,
+  pendingAppRequests: rpcLifecycle.size,
+  sendQueue: outboundQueue.length,
+  bufferedBytes: socket?.bufferedAmount ?? 0,
+});
+electronShim.configureAppHost = (factory) => {
+  appHostRecovery.configure(
+    factory,
+    (state, method) =>
+      recoveryNotice(state, method, () => recoverAppHost(true)),
+    () => recoverAppHost(),
+  );
+  return appHostRecovery.start();
+};
+electronShim.bootFailed = (retry) => {
+  retryBoot = retry;
+  recoveryNotice("failed", "services", () => recoverAppHost(true));
+};
+const registeredQueryClients = new WeakSet<object>();
+electronShim.registerQueryClient = (client) => {
+  if (registeredQueryClients.has(client)) return;
+  registeredQueryClients.add(client);
+  appHostRecovery.onRestored(() => {
+    void client
+      .invalidateQueries({
+        predicate: (query: any) =>
+          (query.queryKey[0] === "vscode" &&
+            STARTUP_FETCH_READS.has(query.queryKey[1])) ||
+          query.queryKey[0] === "config" ||
+          (query.queryKey[0] === "models" && query.queryKey[1] === "list"),
+      })
+      .catch(() => {});
+  });
+};
 electronShim.wrapBrowserServices = wrapBrowserServices;
 electronShim.downloadErrorMessage = downloadErrorMessage;
 electronShim.configureStatsigClient = (client, sdkKey) =>
@@ -693,6 +781,7 @@ export const ipcRenderer = {
       }
 
       if (isUnhandledAddWorkspaceRootOptionMessage(args[0])) {
+        const workspaceOptions = args[0];
         return openSelectWorkspaceRootDialog({
           listDirectory: requestWorkspaceDirectoryEntries,
         }).then((root) => {
@@ -700,7 +789,7 @@ export const ipcRenderer = {
             return undefined;
           }
 
-          return invokeMain(channel, [{ ...args[0], root }]);
+          return invokeMain(channel, [{ ...workspaceOptions, root }]);
         });
       }
 
@@ -765,7 +854,16 @@ export const ipcRenderer = {
 
         const portId = `message_port_${nextRequestId()}`;
         messagePorts.set(portId, transferable);
+        messagePortGenerations.set(portId, appHostRecovery.generation);
         transferable.addEventListener("message", (event) => {
+          if (messagePorts.get(portId) !== transferable) return;
+          if (event.data === null) {
+            messagePorts.delete(portId);
+            messagePortGenerations.delete(portId);
+            transferable.close();
+            enqueueMessage({ type: "message-port-close", portId });
+            return;
+          }
           enqueueMessage({
             type: "message-port-message",
             portId,
@@ -774,6 +872,7 @@ export const ipcRenderer = {
         });
         transferable.addEventListener("messageerror", () => {
           messagePorts.delete(portId);
+          messagePortGenerations.delete(portId);
           enqueueMessage({ type: "message-port-close", portId });
         });
         transferable.start();
