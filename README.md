@@ -68,6 +68,10 @@ Promise must not trap React on its error page after a slow module download. A he
 root retains its editor; only a failed transport error boundary is reset.
 Unrelated background HTTP and user writes do not hold the startup readiness gate;
 required reads remain bounded and diagnostic counts distinguish the two.
+After readiness, routine reads and subscriptions do not start another recovery
+deadline. Background application errors return to their callers; a real transport
+failure starts recovery. This prevents an idle tab from disconnecting itself one
+minute after an otherwise successful background read.
 Remote conversation URLs preserve the native `hostId` query parameter through
 navigation, refresh and browser history. Other parameters, including sign-in tokens,
 are not copied into thread URLs.

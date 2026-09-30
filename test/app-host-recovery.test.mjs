@@ -233,6 +233,75 @@ test("unrelated native RPC and background HTTP cannot keep a configured page in 
   assert.equal(env.writes, 1);
 });
 
+test("idle reads and subscriptions never arm a new startup deadline or inherit background failures", async (t) => {
+  let applicationError = false;
+  const env = setup(t, async () => {
+    if (applicationError) throw new Error("read denied");
+    return { values: {} };
+  });
+  const services = await env.coordinator.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    env.coordinator.observeNative({ method, type: "completed" });
+  await settle();
+
+  const background = env.coordinator.fetchRequest(
+    "/background",
+    undefined,
+    () => new Promise(() => {}),
+  );
+  const backgroundEnded = assert.rejects(background);
+  // A background read of an unmaterialized thread is an application error,
+  // not evidence that the current conversation lost its required settings.
+  env.coordinator.observeNative({ method: "thread/read", type: "started" });
+  env.coordinator.observeNative({ method: "thread/read", type: "failed" });
+  await services.settings.readAll();
+  const subscription = await services.settings.subscribe("theme", () => {});
+  await env.coordinator.fetchRequest(
+    "vscode://codex/get-host-config",
+    undefined,
+    async () => ({ id: "local" }),
+  );
+  applicationError = true;
+  await assert.rejects(services.settings.readAll(), /read denied/);
+  t.mock.timers.tick(120_000);
+  env.coordinator.checkDeadlines();
+  await settle();
+  assert.equal(env.coordinator.failed, false);
+  assert.equal(env.connections, 1);
+  assert.equal(env.callbacks.size, 1);
+  assert.equal(env.coordinator.diagnostics().stages.history, undefined);
+  assert.equal(env.coordinator.diagnostics().pending, 1);
+  subscription[Symbol.dispose]();
+  env.coordinator.disconnect();
+  await backgroundEnded;
+});
+
+test("an actual read timeout after readiness still gets only two recovery retries", async (t) => {
+  let hang = false;
+  const env = setup(t, () =>
+    hang ? new Promise(() => {}) : Promise.resolve({}),
+  );
+  const services = await env.coordinator.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    env.coordinator.observeNative({ method, type: "completed" });
+  await settle();
+  hang = true;
+  const rejected = assert.rejects(services.settings.readAll(), /超时|中断/);
+  await settle();
+  for (const advance of [15_000, 1_000, 15_000, 3_000, 15_000]) {
+    t.mock.timers.tick(advance);
+    await settle();
+  }
+  await rejected;
+  assert.equal(env.connections, 3);
+  assert.equal(env.coordinator.failed, true);
+  assert.equal(env.coordinator.diagnostics().pending, 0);
+});
+
 test("startup native reads retry the extracted request client, while ready write preparation does not replay", async (t) => {
   const { nativeRequestClient } = await import("./desktop-request-harness.mjs");
   const env = setup(t);

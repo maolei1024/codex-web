@@ -172,13 +172,18 @@ export class AppHostRecovery {
       !["started", "completed", "failed", "timed-out"].includes(event.type)
     )
       return;
-    this.stages[phase] = { state: event.type, at: this.now() };
     this.record(
       event.method!,
       phase,
       this.now() - (event.durationMs ?? 0),
       event.type,
     );
+    // Native clients also report background reads and write preparation. Their
+    // errors belong to the caller, not to a completed startup cycle. In
+    // particular, an inactive thread read must not poison the next foreground
+    // conversation or arm a new recovery deadline.
+    if (this.everReady && !this.cycle) return;
+    this.stages[phase] = { state: event.type, at: this.now() };
     if (["failed", "timed-out"].includes(event.type)) {
       this.requiredFailures.add(`${event.hostId ?? "local"}:${event.method}`);
       this.changed?.("failed", phase);
@@ -437,10 +442,14 @@ export class AppHostRecovery {
     this.retrying++;
     try {
       for (;;) {
-        this.budget();
+        // Routine reads/subscriptions continue after startup. Only an actual
+        // disconnect (or initial startup) opens the shared recovery budget.
+        // attempt() still bounds these reads and disconnects on transport loss.
+        if (!this.everReady || this.cycle || !this.current) this.budget();
         try {
           return await operation();
         } catch (error) {
+          if (this.everReady && !this.cycle && this.current) throw error;
           // Application/authorization errors must not turn into synthetic success.
           const cycle = this.budget();
           if (
