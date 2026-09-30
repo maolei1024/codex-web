@@ -44,3 +44,63 @@ test("browser history restores the remote host rather than silently selecting lo
   popstate();
   assert.equal(events.at(-1).data.path, "/local/thread-3");
 });
+
+test("old bookmarks are upgraded from unique native catalog ownership, without guessing or leaking query parameters", async () => {
+  const hosts = ["local", "remote-test"];
+  const read = async (keys) => {
+    assert.deepEqual(
+      keys,
+      hosts.map((hostId) => ({ hostId, threadId: "thread-1" })),
+    );
+    return [
+      { hostId: "remote-test", threadId: "thread-1", sourceKind: "local" },
+    ];
+  };
+  assert.deepEqual(
+    await routes.resolveLegacyThreadRoute(
+      "/thread/thread-1",
+      "?token=private",
+      hosts,
+      read,
+    ),
+    {
+      memoryPath: "/local/thread-1?hostId=remote-test",
+      browserPath: "/thread/thread-1?hostId=remote-test",
+    },
+  );
+  const noRead = async () => {
+    throw Error("must not read");
+  };
+  assert.equal(
+    await routes.resolveLegacyThreadRoute(
+      "/thread/thread-1",
+      "?hostId=local",
+      hosts,
+      noRead,
+    ),
+    null,
+  );
+  assert.equal(
+    await routes.resolveLegacyThreadRoute("/", "", hosts, noRead),
+    null,
+  );
+  for (const entries of [
+    [],
+    hosts.map((hostId) => ({
+      hostId,
+      threadId: "thread-1",
+      sourceKind: "local",
+    })),
+    [{ hostId: "unknown", threadId: "thread-1", sourceKind: "local" }],
+  ]) {
+    assert.equal(
+      await routes.resolveLegacyThreadRoute(
+        "/thread/thread-1",
+        "",
+        hosts,
+        async () => entries,
+      ),
+      null,
+    );
+  }
+});

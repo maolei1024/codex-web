@@ -27,6 +27,41 @@ function threadHostSearch(search: string): string {
   return hostId ? `?${new URLSearchParams({ hostId }).toString()}` : "";
 }
 
+/** Migrate old Web bookmarks only when the native catalog proves ownership. */
+export async function resolveLegacyThreadRoute(
+  pathname: string,
+  search: string,
+  hosts: string[],
+  readEntries: (keys: { hostId: string; threadId: string }[]) => Promise<
+    {
+      hostId: string;
+      threadId: string;
+      sourceKind: string;
+    }[]
+  >,
+) {
+  const route = mapBrowserPathToRoute(pathname, search);
+  if (!route.startsWith("/local/") || threadHostSearch(search)) return null;
+  const threadId = route.slice("/local/".length);
+  const candidates = new Set(hosts);
+  const entries = await readEntries(
+    [...candidates].map((hostId) => ({ hostId, threadId })),
+  );
+  const matches = new Set(
+    entries
+      .filter(
+        (entry) =>
+          entry.threadId === threadId &&
+          entry.sourceKind !== "chatgpt" &&
+          candidates.has(entry.hostId),
+      )
+      .map((entry) => entry.hostId),
+  );
+  if (matches.size !== 1) return null;
+  const query = `?${new URLSearchParams({ hostId: [...matches][0] })}`;
+  return { memoryPath: `${route}${query}`, browserPath: `${pathname}${query}` };
+}
+
 function mapBrowserPathToRoute(pathname: string, search = ""): string {
   const match = pathname.match(/^\/thread\/([^/]+)$/);
   if (match) {

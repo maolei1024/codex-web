@@ -1,6 +1,7 @@
 import {
   mapBrowserPathToInitialRoute,
   mapMemoryPathToBrowserPath,
+  resolveLegacyThreadRoute,
 } from "./routes";
 import {
   handleLocalFilePickerMessage,
@@ -731,6 +732,35 @@ electronShim.configureAppHost = async (factory) => {
     emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [
       { type: "shared-object-updated", key, value },
     ]);
+  if (
+    services.localThreadCatalog &&
+    electronShim.initialRoute?.startsWith("/local/")
+  ) {
+    const hosts = [
+      "local",
+      ...[
+        "remote_ssh_connections",
+        "remote_wsl_connections",
+        "remote_control_connections",
+      ]
+        .flatMap((key) => (Array.isArray(snapshot[key]) ? snapshot[key] : []))
+        .flatMap((entry) =>
+          isRecord(entry) && typeof entry.hostId === "string"
+            ? [entry.hostId]
+            : [],
+        ),
+    ];
+    const route = await resolveLegacyThreadRoute(
+      window.location.pathname,
+      window.location.search,
+      hosts,
+      (keys) => services.localThreadCatalog.readEntries(keys),
+    );
+    if (route) {
+      electronShim.initialRoute = route.memoryPath;
+      window.history.replaceState(undefined, "", route.browserPath);
+    }
+  }
   return services;
 };
 electronShim.bootFailed = (retry) => {

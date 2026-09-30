@@ -71,6 +71,9 @@ required reads remain bounded and diagnostic counts distinguish the two.
 Remote conversation URLs preserve the native `hostId` query parameter through
 navigation, refresh and browser history. Other parameters, including sign-in tokens,
 are not copied into thread URLs.
+Old bookmarks without a host are upgraded only when the native catalog identifies
+one matching host; explicit host choices are preserved and ambiguous matches are
+not guessed.
 Before first render, authenticated IPC loads the native shared-state snapshot.
 Remote routes wait for their AppServer manager to register before mounting, so
 route suspension and layout callbacks cannot block the bootstrap that creates it.
