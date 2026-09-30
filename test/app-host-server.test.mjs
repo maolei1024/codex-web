@@ -12,6 +12,33 @@ const {
 const { ipcMain } = require("../src/server/electron/index.js");
 const rpc = await nativeAppHostRuntime();
 
+test("initial shared state uses the native snapshot handler without exposing other synchronous IPC", async () => {
+  const channel = "codex_desktop:get-shared-object-snapshot";
+  const listener = (event) => {
+    event.returnValue = {
+      remote_ssh_connections: [{ hostId: "remote-test" }],
+      statsig_evaluations: { privatePayload: true },
+    };
+  };
+  ipcMain.on(channel, listener);
+  try {
+    const bridge = globalThis.__codexElectronIpcBridge;
+    assert.deepEqual(await bridge.handleRendererInvoke(channel, []), {
+      remote_ssh_connections: [{ hostId: "remote-test" }],
+    });
+    await assert.rejects(
+      bridge.handleRendererInvoke("other-sync-ipc", []),
+      /No ipcMain.handle/,
+    );
+  } finally {
+    ipcMain.off(channel, listener);
+  }
+  await assert.rejects(
+    globalThis.__codexElectronIpcBridge.handleRendererInvoke(channel, []),
+    /not ready/,
+  );
+});
+
 test("channel-scoped renderer lifetimes preserve primary identity and isolate destruction", () => {
   const events = [];
   ipcMain.on("test-app-host-scopes", (event) => events.push(event));

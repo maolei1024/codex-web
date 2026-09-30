@@ -206,6 +206,33 @@ test("required configuration failure cannot be hidden by successful display sett
   assert.equal(env.coordinator.failed, true);
 });
 
+test("unrelated native RPC and background HTTP cannot keep a configured page in startup", async (t) => {
+  const env = setup(t);
+  const services = await env.coordinator.start();
+  const native = services.settings.write("theme", "dark");
+  const nativeEnded = assert.rejects(native);
+  const http = env.coordinator.fetchRequest(
+    "/background",
+    undefined,
+    () => new Promise(() => {}),
+  );
+  const httpEnded = assert.rejects(http);
+  await settle();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    env.coordinator.observeNative({ method, type: "completed" });
+  await settle();
+  assert.equal(env.coordinator.diagnostics().pending, 2);
+  assert.equal(env.coordinator.diagnostics().requiredPending, 0);
+  t.mock.timers.tick(61_000);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, false);
+  env.coordinator.disconnect();
+  await Promise.all([nativeEnded, httpEnded]);
+  assert.equal(env.writes, 1);
+});
+
 test("startup native reads retry the extracted request client, while ready write preparation does not replay", async (t) => {
   const { nativeRequestClient } = await import("./desktop-request-harness.mjs");
   const env = setup(t);

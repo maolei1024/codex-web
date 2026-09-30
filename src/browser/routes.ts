@@ -18,15 +18,20 @@ export function mapBrowserPathToInitialRoute(pathname: string, search: string) {
   }
 
   return {
-    memoryPath: mapBrowserPathToRoute(pathname),
+    memoryPath: mapBrowserPathToRoute(pathname, search),
   };
 }
 
-function mapBrowserPathToRoute(pathname: string): string {
+function threadHostSearch(search: string): string {
+  const hostId = new URLSearchParams(search).get("hostId");
+  return hostId ? `?${new URLSearchParams({ hostId }).toString()}` : "";
+}
+
+function mapBrowserPathToRoute(pathname: string, search = ""): string {
   const match = pathname.match(/^\/thread\/([^/]+)$/);
   if (match) {
     try {
-      return `/local/${decodeURIComponent(match[1])}`;
+      return `/local/${decodeURIComponent(match[1])}${threadHostSearch(search)}`;
     } catch {
       return "/";
     }
@@ -35,7 +40,7 @@ function mapBrowserPathToRoute(pathname: string): string {
   return "/";
 }
 
-export function mapMemoryPathToBrowserPath(pathname: string) {
+export function mapMemoryPathToBrowserPath(pathname: string, search = "") {
   if (pathname === "/") {
     return { path: "/", titleChange: "Codex" };
   }
@@ -45,7 +50,9 @@ export function mapMemoryPathToBrowserPath(pathname: string) {
     return null;
   }
 
-  return { path: `/thread/${encodeURIComponent(match[1])}` };
+  return {
+    path: `/thread/${encodeURIComponent(match[1])}${threadHostSearch(search)}`,
+  };
 }
 
 export function dispatchNavigateToRoute(path: string): void {
@@ -60,5 +67,7 @@ export function dispatchNavigateToRoute(path: string): void {
 }
 
 window.addEventListener("popstate", () => {
-  dispatchNavigateToRoute(mapBrowserPathToRoute(window.location.pathname));
+  dispatchNavigateToRoute(
+    mapBrowserPathToRoute(window.location.pathname, window.location.search),
+  );
 });

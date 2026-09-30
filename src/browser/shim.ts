@@ -579,10 +579,36 @@ function nextRequestId(): string {
   return `ipc_bridge_${requestCounter}`;
 }
 
-function invokeMain(channel: string, args: unknown[]): Promise<unknown> {
+function invokeMain(
+  channel: string,
+  args: unknown[],
+  signal?: AbortSignal,
+): Promise<unknown> {
   const requestId = nextRequestId();
   return new Promise((resolve, reject) => {
-    pendingInvokes.set(requestId, { resolve, reject });
+    const abort = () => {
+      pendingInvokes.delete(requestId);
+      const index = outboundQueue.findIndex(
+        (message) =>
+          message.type === "ipc-renderer-invoke" &&
+          message.requestId === requestId,
+      );
+      if (index >= 0) outboundQueue.splice(index, 1);
+      reject(signal?.reason);
+    };
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+    const finish = (callback: (value: any) => void) => (value: any) => {
+      signal?.removeEventListener("abort", abort);
+      callback(value);
+    };
+    pendingInvokes.set(requestId, {
+      resolve: finish(resolve),
+      reject: finish(reject),
+    });
     const isRpc = rpcLifecycle.track(requestId, channel, args);
     if (isRpc && hasConnectionFailed && socket?.readyState !== WebSocket.OPEN) {
       rpcLifecycle.fail(
@@ -684,14 +710,28 @@ electronShim.diagnostics = () => ({
   sendQueue: outboundQueue.length,
   bufferedBytes: socket?.bufferedAmount ?? 0,
 });
-electronShim.configureAppHost = (factory) => {
+electronShim.configureAppHost = async (factory) => {
   appHostRecovery.configure(
     factory,
     (state, method) =>
       recoveryNotice(state, method, () => recoverAppHost(true)),
     () => recoverAppHost(),
   );
-  return appHostRecovery.start();
+  const services = await appHostRecovery.start();
+  const snapshot = await appHostRecovery.fetchRequest(
+    "vscode://codex/get-shared-object-snapshot",
+    undefined,
+    (signal) =>
+      invokeMain("codex_desktop:get-shared-object-snapshot", [], signal),
+  );
+  if (!isRecord(snapshot)) throw new Error("Invalid Desktop shared state");
+  // Populate the native preload cache before any scope atoms initialize. An
+  // empty host list can otherwise suspend the route before manager effects commit.
+  for (const [key, value] of Object.entries(snapshot))
+    emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [
+      { type: "shared-object-updated", key, value },
+    ]);
+  return services;
 };
 electronShim.bootFailed = (retry) => {
   retryBoot = retry;
@@ -752,7 +792,10 @@ electronShim.onMemoryNavigationChanged = (navigation) => {
     electronShim.closeSidebar?.();
   }
 
-  const browserPath = mapMemoryPathToBrowserPath(path);
+  const browserPath = mapMemoryPathToBrowserPath(
+    path,
+    navigation.location.search,
+  );
   if (browserPath == null) {
     return;
   }
@@ -761,7 +804,10 @@ electronShim.onMemoryNavigationChanged = (navigation) => {
     document.title = browserPath.titleChange;
   }
 
-  if (window.location.pathname === browserPath.path) {
+  if (
+    navigation.action === "REPLACE" ||
+    `${window.location.pathname}${window.location.search}` === browserPath.path
+  ) {
     window.history.replaceState(undefined, "", browserPath.path);
     return;
   }

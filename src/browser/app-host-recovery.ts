@@ -12,7 +12,11 @@ type Subscription = {
   active: boolean;
   attaching?: Promise<void>;
 };
-type Pending = { deadline: number; fail(error: Error): void };
+type Pending = {
+  deadline: number;
+  required: boolean;
+  fail(error: Error): void;
+};
 export type RecoveryEvent = {
   generation: number;
   method: string;
@@ -68,6 +72,7 @@ const SUBSCRIPTIONS = new Set([
 ]);
 export const STARTUP_FETCH_READS = new Set([
   "get-settings",
+  "get-shared-object-snapshot",
   "get-global-state",
   "get-host-config",
   "get-workspace-roots",
@@ -138,6 +143,8 @@ export class AppHostRecovery {
     return {
       generation: this.generation,
       pending: this.pending.size,
+      requiredPending: [...this.pending].filter((request) => request.required)
+        .length,
       subscriptions: this.subscriptions.size,
       exhausted: this.exhausted,
       stages: { ...this.stages },
@@ -188,7 +195,7 @@ export class AppHostRecovery {
       !this.initialStartup ||
       this.connecting ||
       this.retrying ||
-      this.pending.size ||
+      [...this.pending].some((request) => request.required) ||
       this.requiredFailures.size ||
       this.exhausted ||
       (this.requiresHistory() && this.stages.history?.state !== "completed") ||
@@ -321,6 +328,7 @@ export class AppHostRecovery {
       };
       const pending: Pending = {
         deadline,
+        required: bounded,
         fail: (error) =>
           finish(
             new RecoveryError(

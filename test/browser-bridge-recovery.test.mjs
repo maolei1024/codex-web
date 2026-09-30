@@ -142,6 +142,68 @@ async function clientFor(bridge) {
   return client;
 }
 
+test("AppHost startup waits for the real shared snapshot before mounting remote routes", async (t) => {
+  const bridge = setup(t),
+    socket = bridge.sockets[0];
+  socket.open();
+  const events = [];
+  bridge.ipc.on(incoming, (_event, message) => events.push(message));
+  let ready = false;
+  const boot = bridge.window.__ELECTRON_SHIM__
+    .configureAppHost(() => ({
+      services: Promise.resolve({ settings: {} }),
+      close() {},
+    }))
+    .then(() => {
+      ready = true;
+    });
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  const request = socket.sent.find(
+    (x) => x.channel === "codex_desktop:get-shared-object-snapshot",
+  );
+  assert.ok(request);
+  assert.equal(ready, false);
+  socket.receive({
+    type: "ipc-renderer-invoke-result",
+    requestId: request.requestId,
+    ok: true,
+    result: { remote_ssh_connections: [{ hostId: "remote-test" }] },
+  });
+  await boot;
+  assert.equal(ready, true);
+  assert.equal(events[0].key, "remote_ssh_connections");
+  assert.equal(events[0].value[0].hostId, "remote-test");
+  assert.equal(bridge.window.__ELECTRON_SHIM__.diagnostics().pendingInvokes, 0);
+});
+
+test("expired snapshot reads clean up IPC tracking and ignore late replies", async (t) => {
+  const bridge = setup(t),
+    socket = bridge.sockets[0];
+  socket.open();
+  const events = [];
+  bridge.ipc.on(incoming, (_event, message) => events.push(message));
+  const boot = bridge.window.__ELECTRON_SHIM__.configureAppHost(() => ({
+    services: Promise.resolve({ settings: {} }),
+    close() {},
+  }));
+  const rejected = assert.rejects(boot);
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  const request = socket.sent.find(
+    (x) => x.channel === "codex_desktop:get-shared-object-snapshot",
+  );
+  t.mock.timers.tick(60_001);
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  await rejected;
+  assert.equal(bridge.window.__ELECTRON_SHIM__.diagnostics().pendingInvokes, 0);
+  socket.receive({
+    type: "ipc-renderer-invoke-result",
+    requestId: request.requestId,
+    ok: true,
+    result: { remote_ssh_connections: [{ hostId: "stale" }] },
+  });
+  assert.equal(events.length, 0);
+});
+
 test("real bridge rejects native requests even after IPC ack, and never replays a lost turn", async (t) => {
   const bridge = setup(t);
   const client = await clientFor(bridge);

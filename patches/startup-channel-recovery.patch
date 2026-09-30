@@ -101,6 +101,112 @@
    let t = (0, sks.c)(3),
      { children: n } = e;
    if (ajn()) {
+--- a/webview/assets/app-initial-236e1501144c.js
++++ b/webview/assets/app-initial-236e1501144c.js
+@@ -491530,52 +491530,74 @@
+ function mLs() {
+   (dO.markInitializationPhase(`host_services_ready`), MCa(), wAn());
+ }
++function codexWebStartupRoot({ required }) {
++  const [ready, setReady] = _Ls.useState(!required);
++  const [revision, setRevision] = _Ls.useState(0);
++  const readyRef = _Ls.useRef(!required);
++  const errorRef = _Ls.useRef(null);
++  _Ls.useEffect(() => {
++    let active = true, sequence = 0;
++    const read = () => {
++      if (readyRef.current) return;
++      const attempt = ++sequence;
++      Promise.resolve().then(() => iX.startup.whenReady()).then(() => {
++        if (!active || attempt !== sequence) return;
++        readyRef.current = true;
++        dO.markInitializationPhase(`host_startup_ready`);
++        setReady(true);
++      }, () => {
++        // The coordinator has settled the failed request and exposes Retry.
++        // Keep this gate mounted instead of giving React a rejected Promise.
++      });
++    };
++    const remove = window.__ELECTRON_SHIM__.appHost.onRestored(() => {
++      if (!active) return;
++      read();
++      if (errorRef.current == null || window.__ELECTRON_SHIM__.isTransportFailure(errorRef.current))
++        setRevision(value => value + 1);
++    });
++    read();
++    return () => { active = false; sequence++; remove(); };
++  }, [required]);
++  return (0, K7.jsxs)(AQ, {
++    name: `App`,
++    resetKey: revision,
++    fallback: (0, K7.jsx)(cDo, {}),
++    onError: error => { errorRef.current = error; },
++    onReset: () => { errorRef.current = null; },
++    children: [
++      !yLs && !q7 && !bLs && iX.startup != null
++        ? (0, K7.jsx)(`span`, {
++            ref: element => { if (element != null) { dO.markInitializationPhase(`renderer_ready`); oAs(); } },
++            "aria-hidden": true,
++            hidden: true,
++          })
++        : null,
++      ready ? (0, K7.jsx)(jPs, {}) : (0, K7.jsx)(I3, { debugName: `Startup` }),
++    ],
++  });
++}
+ function hLs() {
+   T.info(`[statsig-refresh-diagnostics] React root render requested`, {
+     safe: { windowType: `electron` },
+   });
+-  let e =
+-    yLs || q7 || bLs || iX.startup?.whenReady == null
+-      ? void 0
+-      : Promise.resolve(iX.startup.whenReady()).then(() => {
+-          dO.markInitializationPhase(`host_startup_ready`);
+-        });
+   return (0, K7.jsxs)(_Ls.StrictMode, {
+     children: [
+       !yLs && !q7
+         ? (0, K7.jsx)(K7.Fragment, {
+             children: (0, K7.jsx)(`div`, {
+-              "aria-hidden": !0,
++              "aria-hidden": true,
+               className: `pointer-events-none fixed inset-x-0 top-0 h-toolbar draggable`,
+             }),
+           })
+         : null,
+-      (0, K7.jsxs)(AQ, {
+-        name: `App`,
+-        fallback: (0, K7.jsx)(cDo, {}),
+-        onError: void 0,
+-        children: [
+-          !yLs && !q7 && !bLs && iX.startup != null
+-            ? (0, K7.jsx)(`span`, {
+-                ref: (e) => {
+-                  e != null &&
+-                    (dO.markInitializationPhase(`renderer_ready`), oAs());
+-                },
+-                "aria-hidden": !0,
+-                hidden: !0,
+-              })
+-            : null,
+-          e == null
+-            ? (0, K7.jsx)(jPs, {})
+-            : (0, K7.jsx)(_Ls.Suspense, {
+-                fallback: (0, K7.jsx)(I3, { debugName: `Startup` }),
+-                children: (0, K7.jsx)(jPs, { startupReady: e }),
+-              }),
+-        ],
++      (0, K7.jsx)(codexWebStartupRoot, {
++        required: !yLs && !q7 && !bLs && iX.startup?.whenReady != null,
+       }),
+     ],
+   });
+ }
++
+ async function gLs() {}
+ var _Ls,
+   K7,
 --- a/webview/assets/app-main-430ec1c809d0.js
 +++ b/webview/assets/app-main-430ec1c809d0.js
 @@ -12,6 +12,9 @@
@@ -259,3 +365,24 @@
          i.n().warning(`Failed to register AppView RPC services`, {
            safe: {},
            sensitive: { error: e },
+
+--- a/webview/assets/app-initial-236e1501144c.js
++++ b/webview/assets/app-initial-236e1501144c.js
+@@ -487588,3 +487588,16 @@
+-function PPs() {
++function PPs() {
++  const location = rT();
++  const hosts = db(fE);
++  const mountedHost = H7.useRef(null);
++  const host = new URLSearchParams(location.search).get("hostId");
++  const waiting = host != null && !hosts.includes(host) && mountedHost.current !== host;
++  if (!waiting) mountedHost.current = host;
++  // Bootstrap effects live outside this route. Suspending the route while its
++  // manager is missing can otherwise prevent those effects from committing.
++  return waiting
++    ? (0, U7.jsx)(I3, { debugName: "Remote host" })
++    : (0, U7.jsx)(codexWebReadyRoute, {});
++}
++function codexWebReadyRoute() {
+   let e = (0, V7.c)(40),
+     t = hb(Q),

@@ -104,6 +104,22 @@ try {
     ]);
     assert.ok(settings.values && settings.configuredValues, "AppHost must return native settings");
     assert.ok(Object.keys(settings.values).length > 0);
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { socket.off("message", received); reject(new Error("Initial snapshot timeout")); }, 15_000);
+      const received = raw => {
+        const envelope = JSON.parse(raw);
+        if (envelope.requestId !== "smoke-snapshot") return;
+        clearTimeout(timer); socket.off("message", received);
+        try {
+          assert.equal(envelope.ok, true);
+          assert.ok(envelope.result.host_config);
+          assert.equal("statsig_evaluations" in envelope.result, false);
+          resolve();
+        } catch (error) { reject(error); }
+      };
+      socket.on("message", received);
+      socket.send(JSON.stringify({ type: "ipc-renderer-invoke", requestId: "smoke-snapshot", channel: "codex_desktop:get-shared-object-snapshot", args: [] }));
+    });
   } finally {
     clearTimeout(settingsTimer);
     host[Symbol.dispose]();

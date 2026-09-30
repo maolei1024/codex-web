@@ -63,6 +63,18 @@ replayed. Required configuration errors remain errors, with a retry notice outsi
 the React tree. Recovery retains the route, rendered history, editor and attachments;
 it does not remount the app or simulate a page refresh. Each browser channel owns its
 callback lifetime, so closing one tab cannot unregister another tab's callbacks.
+The native startup gate also reacquires readiness after recovery. An expired startup
+Promise must not trap React on its error page after a slow module download. A healthy
+root retains its editor; only a failed transport error boundary is reset.
+Unrelated background HTTP and user writes do not hold the startup readiness gate;
+required reads remain bounded and diagnostic counts distinguish the two.
+Remote conversation URLs preserve the native `hostId` query parameter through
+navigation, refresh and browser history. Other parameters, including sign-in tokens,
+are not copied into thread URLs.
+Before first render, authenticated IPC loads the native shared-state snapshot.
+Remote routes wait for their AppServer manager to register before mounting, so
+route suspension and layout callbacks cannot block the bootstrap that creates it.
+The wait does not replace an already mounted editor during reconnection.
 
 The display-only conversation-detail setting waits at most one second for identity
 and feature assignments, then uses Desktop's existing unavailable-value semantics.

@@ -306,6 +306,17 @@ function createIpcMainStub(): {
   ): Promise<unknown> => {
     const handler = handlers.get(channel);
     if (!handler) {
+      // The Web preload cannot perform Electron's synchronous initial read.
+      // Expose only this read over authenticated IPC, before React mounts.
+      if (channel === "codex_desktop:get-shared-object-snapshot") {
+        const event = createIpcMainEvent();
+        emitter.emit(channel, event, ...args);
+        if (event.returnValue == null)
+          throw new Error("Desktop shared state is not ready");
+        const { statsig_evaluations: _evaluations, ...snapshot } =
+          event.returnValue as Record<string, unknown>;
+        return snapshot;
+      }
       throw new Error(`[electron-main-stub] No ipcMain.handle for ${channel}`);
     }
     const event = createIpcMainEvent();
