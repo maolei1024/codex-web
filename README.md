@@ -35,6 +35,9 @@ cache miss, the Statsig SDK waits at most one second for remote configuration,
 then starts with its existing cached values/defaults and refreshes in the
 background. Remote configuration failures must not hold the Web shell behind
 network retries. This does not change account authorization or model requests.
+React tracks a shared initialization Promise per SDK client, rather than a render's
+local loading flag. Interrupted initial renders therefore wake when the SDK finishes;
+initialization failures remain errors and cannot fabricate a ready client.
 The browser publishes its SDK evaluations without subscribing to a full snapshot
 from other renderers. Shared-object updates go only to subscribing WebSocket
 clients; disconnects release Desktop subscription references, so refreshes do

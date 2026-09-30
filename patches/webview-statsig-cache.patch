@@ -11,3 +11,41 @@
          { sdkKey: e, initialUser: r, statsigOptions: i },
        );
      }
+--- a/webview/assets/app-initial-236e1501144c.js
++++ b/webview/assets/app-initial-236e1501144c.js
+@@ -179733,19 +179733,23 @@
+       (e.useStatsigInternalClientFactoryAsync = void 0));
+     var t = cx(),
+       n = c();
++    const codexWebInitializations = new WeakMap();
+     function r(e, r) {
+-      let i = (0, n.useMemo)(() => (0, t._getInstance)(r.sdkKey) ?? e(r), []),
+-        [a, o] = (0, n.useState)(i.loadingStatus !== `Ready`);
+-      return (
+-        (0, n.useMemo)(() => {
+-          i.loadingStatus !== `Ready` &&
+-            i
+-              .initializeAsync()
+-              .catch(t.Log.error)
+-              .finally(() => o(!1));
+-        }, []),
+-        { client: i, isLoading: a }
+-      );
++      const client = (0, n.useMemo)(() => (0, t._getInstance)(r.sdkKey) ?? e(r), []);
++      if (client.loadingStatus !== `Ready`) {
++        let pending = codexWebInitializations.get(client);
++        if (pending == null) {
++          pending = client.initializeAsync().then(() => {
++            if (client.loadingStatus !== `Ready`)
++              throw Error(`Feature configuration initialization did not complete`);
++          });
++          codexWebInitializations.set(client, pending);
++        }
++        // A render can be suspended before its state setter is mounted. Let
++        // React track the SDK promise itself so completion always retries it.
++        (0, n.use)(pending);
++      }
++      return { client, isLoading: false };
+     }
+     e.useStatsigInternalClientFactoryAsync = r;
+   }),
