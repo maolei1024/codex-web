@@ -28,6 +28,7 @@ import {
 import { sanitizeMcpRequestPaths } from "./mcp-request-path-sanitizer";
 import { readAssetVersion } from "./asset-version";
 import { installDownloadHooks } from "./downloads";
+import { installFeatureConfigRoute } from "./feature-config";
 import {
   parsePositiveInteger,
   UploadLimitError,
@@ -599,6 +600,7 @@ export async function startIpcBridgeServer(
   if (options.token !== null) {
     installAuthHook(app, options.token);
   }
+  await installFeatureConfigRoute(app);
 
   await app.register(fastifyMultipart, {
     throwFileSizeLimit: true,

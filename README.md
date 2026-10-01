@@ -41,6 +41,13 @@ shutdown or budget exhaustion; Desktop's periodic refresh remains active.
 Recovery requires values applied to the SDK evaluation store, rather than only
 a completed HTTP request or a Ready status. Diagnostics expose refresh start,
 success, failure and exhaustion as `codex-web:statsig-*` performance marks.
+Native Statsig initialization uses authenticated `/__backend/feature-config`
+HTTP requests, keeping large responses off AppHost's conversation and settings
+message stream. The endpoint only posts to `https://ab.chatgpt.com/v1/initialize`,
+forwards SDK headers and query parameters, and never forwards Web cookies or
+account authorization. It preserves upstream values and denials, rejects redirects,
+uses no-store responses with gzip, and bounds time, payload size and concurrency.
+Other Desktop HTTP requests keep their native transport.
 React tracks a shared initialization Promise per SDK client, rather than a render's
 local loading flag. Interrupted initial renders therefore wake when the SDK finishes;
 initialization failures remain errors and cannot fabricate a ready client.

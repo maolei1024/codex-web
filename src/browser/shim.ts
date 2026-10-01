@@ -31,6 +31,7 @@ import {
   configureStatsigClient,
   type StatsigClientLike,
 } from "./statsig-cache";
+import { configureStatsigOptions } from "./statsig-network";
 import {
   openSelectWorkspaceRootDialog,
   type WorkspaceDirectoryEntries,
@@ -139,6 +140,7 @@ type ElectronShimState = {
   imageDrafts?: typeof imageDrafts;
   wrapBrowserServices?: typeof wrapBrowserServices;
   downloadErrorMessage?: typeof downloadErrorMessage;
+  configureStatsigOptions?: typeof configureStatsigOptions;
   configureStatsigClient?: <T extends StatsigClientLike>(
     client: T,
     sdkKey: string,
@@ -786,6 +788,7 @@ electronShim.registerQueryClient = (client) => {
 };
 electronShim.wrapBrowserServices = wrapBrowserServices;
 electronShim.downloadErrorMessage = downloadErrorMessage;
+electronShim.configureStatsigOptions = configureStatsigOptions;
 electronShim.configureStatsigClient = (client, sdkKey) =>
   configureStatsigClient(client, sdkKey, __CODEX_WEB_BUILD_ID__);
 const buildFlavor: "prod" | "dev" | "agent" | string = "prod";
