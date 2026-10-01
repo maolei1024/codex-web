@@ -10,6 +10,7 @@ const {
   STATSIG_CACHE_TTL_MS,
   STATSIG_CACHE_ENTRY_MAX_BYTES,
   STATSIG_STARTUP_TIMEOUT_MS,
+  STATSIG_REFRESH_DELAYS_MS,
 } = await importTypescriptModule("src/browser/statsig-cache.ts");
 const BUILD = "26.901-test";
 const SDK = "client-test-sdk";
@@ -48,14 +49,18 @@ function fixture(overrides = {}) {
     ...overrides,
   };
   const scheduled = [];
+  const delays = [];
   const marks = [];
   const deps = {
     store,
     now: () => clock.value,
-    schedule: (fn) => scheduled.push(fn),
+    schedule: (fn, delayMs) => {
+      scheduled.push(fn);
+      delays.push(delayMs);
+    },
     mark: (event) => marks.push(event),
   };
-  return { clock, records, store, scheduled, marks, deps };
+  return { clock, records, store, scheduled, delays, marks, deps };
 }
 
 function fakeClient(f, initialUser = structuredClone(user)) {
@@ -109,6 +114,7 @@ function fakeClient(f, initialUser = structuredClone(user)) {
     async refreshValuesAsync() {
       this.refreshCalls++;
       if (this.failRefresh) throw new Error("offline");
+      this.values = structuredClone(payload);
       data = {
         source: "NetworkNotModified",
         data: JSON.stringify(payload),
@@ -227,6 +233,82 @@ test("failed cold startup never refreshes after shutdown or an account switch", 
     f.scheduled[0]();
     await tick();
     assert.equal(client.refreshCalls, 0);
+  }
+});
+
+test("feature configuration recovers after resolved and thrown refresh failures", async () => {
+  const f = fixture();
+  const client = fakeClient(f);
+  client.initializeAsync = async () => {
+    client.loadingStatus = "Ready";
+    return { success: false, source: "NoValues" };
+  };
+  const refresh = client.refreshValuesAsync.bind(client);
+  let attempts = 0;
+  client.refreshValuesAsync = async () => {
+    attempts++;
+    if (attempts === 1) return { success: false, source: "NoValues" };
+    if (attempts === 2) throw Error("temporary connection failure");
+    return refresh();
+  };
+  configureStatsigClient(client, SDK, BUILD, f.deps);
+  await client.initializeAsync();
+  for (let i = 0; i < 2; i++) {
+    f.scheduled[i]();
+    await tick();
+    assert.equal(client.values, undefined, "missing values never grant features");
+    assert.equal(f.records.size, 0);
+  }
+  f.scheduled[2]();
+  await tick();
+  assert.deepEqual(client.values, payload);
+  assert.equal(f.records.size, 1);
+  assert.equal(f.scheduled.length, 3, "successful recovery stops retrying");
+  assert.deepEqual(f.delays, STATSIG_REFRESH_DELAYS_MS.slice(0, 3));
+  assert.ok(f.marks.includes("refresh-succeeded"));
+});
+
+test("Ready without applied feature values exhausts a bounded retry budget", async () => {
+  const f = fixture();
+  const client = fakeClient(f);
+  client.initializeAsync = async () => {
+    client.loadingStatus = "Ready";
+    return { success: false };
+  };
+  client.refreshValuesAsync = async () => {
+    client.refreshCalls++;
+    return { success: true };
+  };
+  configureStatsigClient(client, SDK, BUILD, f.deps);
+  await client.initializeAsync();
+  for (let i = 0; i < STATSIG_REFRESH_DELAYS_MS.length; i++) {
+    f.scheduled[i]();
+    await tick();
+  }
+  assert.equal(client.refreshCalls, STATSIG_REFRESH_DELAYS_MS.length);
+  assert.equal(f.scheduled.length, STATSIG_REFRESH_DELAYS_MS.length);
+  assert.ok(f.marks.includes("refresh-exhausted"));
+  assert.equal(client.values, undefined);
+  assert.equal(f.records.size, 0);
+});
+
+test("queued retry stops when the account changes or the client shuts down", async () => {
+  for (const shutdown of [false, true]) {
+    const f = fixture();
+    const client = fakeClient(f);
+    client.initializeAsync = async () => ({ success: false });
+    client.failRefresh = true;
+    configureStatsigClient(client, SDK, BUILD, f.deps);
+    await client.initializeAsync();
+    f.scheduled[0]();
+    await tick();
+    assert.equal(f.scheduled.length, 2);
+    if (shutdown) client.emit("client_shutdown");
+    else client.user = { ...user, userID: "other" };
+    f.scheduled[1]();
+    await tick();
+    assert.equal(client.refreshCalls, 1);
+    assert.equal(f.records.size, 0);
   }
 });
 

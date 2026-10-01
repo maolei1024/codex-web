@@ -42,6 +42,14 @@ spec:
                 secretKeyRef:
                   name: codex-web-auth
                   key: token
+            # Node's native fetch otherwise ignores HTTPS_PROXY. Resolve public
+            # HTTPS destinations through the existing node-local Mihomo service.
+            - name: NODE_OPTIONS
+              value: "--use-env-proxy"
+            - name: HTTPS_PROXY
+              value: "http://cluster-proxy-local.project-mihomo:27890"
+            - name: NO_PROXY
+              value: "localhost,127.0.0.1,::1,[::1],.svc,.cluster.local,.project-mihomo,.tail1872f6.ts.net,.ixuni.win"
           resources:
             requests:
               cpu: 100m

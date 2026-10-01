@@ -35,6 +35,12 @@ cache miss, the Statsig SDK waits at most one second for remote configuration,
 then starts with its existing cached values/defaults and refreshes in the
 background. Remote configuration failures must not hold the Web shell behind
 network retries. This does not change account authorization or model requests.
+Failed background refreshes retry with delays of 2, 5, 15 and 30 seconds, with
+a 15-second SDK deadline per attempt. Retries stop after success, account changes,
+shutdown or budget exhaustion; Desktop's periodic refresh remains active.
+Recovery requires values applied to the SDK evaluation store, rather than only
+a completed HTTP request or a Ready status. Diagnostics expose refresh start,
+success, failure and exhaustion as `codex-web:statsig-*` performance marks.
 React tracks a shared initialization Promise per SDK client, rather than a render's
 local loading flag. Interrupted initial renders therefore wake when the SDK finishes;
 initialization failures remain errors and cannot fabricate a ready client.
@@ -220,6 +226,13 @@ The manifest requires the directory to exist and keeps `Recreate` updates and
 the ml256 node selector. Storage uses the host filesystem's available capacity;
 there is no PVC or 10 GiB volume quota. Back up this directory with the application
 stopped before moving the deployment to another host.
+
+The cluster deployment enables Node's `--use-env-proxy` and sends public HTTPS
+through the existing node-local `cluster-proxy-local.project-mihomo:27890` service.
+This lets the proxy resolve upstream feature-configuration domains instead of
+using the cluster's external DNS answers. Localhost, service names and the private
+`ixuni.win` / Tailnet domains bypass the proxy. TLS verification remains enabled;
+model capabilities and feature gates still come from their actual backends.
 
 Mount persistent storage at `/data`. The container keeps its home in `/data/home`,
 Codex state in `/data/codex`, Electron state in `/data/app`, documents in

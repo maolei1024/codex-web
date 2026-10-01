@@ -3,6 +3,7 @@ export const STATSIG_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 export const STATSIG_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 export const STATSIG_CACHE_ENTRY_MAX_BYTES = 8 * 1024 * 1024;
 export const STATSIG_STARTUP_TIMEOUT_MS = 1_000;
+export const STATSIG_REFRESH_DELAYS_MS = [2_000, 5_000, 15_000, 30_000] as const;
 const CACHE_SCHEMA = 1;
 const CACHE_DB = "codex-web-feature-config-v1";
 const CACHE_STORE = "snapshots";
@@ -234,18 +235,18 @@ export function clearStatsigSnapshots(): void {
   void browserStore.clear().catch(() => {});
 }
 
-function afterStartup(callback: () => void): void {
+function afterStartup(callback: () => void, delayMs: number): void {
   setTimeout(() => {
     if (typeof requestIdleCallback === "function")
       requestIdleCallback(callback, { timeout: 2_000 });
     else callback();
-  }, 2_000);
+  }, delayMs);
 }
 
 type CacheDependencies = {
   store?: SnapshotStore;
   now?: () => number;
-  schedule?: (callback: () => void) => void;
+  schedule?: (callback: () => void, delayMs: number) => void;
   mark?: (event: string) => void;
 };
 
@@ -323,24 +324,44 @@ export function configureStatsigClient<T extends StatsigClientLike>(
     active = false;
   });
 
-  const scheduleRefresh = (identity: string): void => {
+  const isCurrentIdentity = (identity: string): boolean =>
+    active &&
+    generation === cacheGeneration &&
+    identity === targetingIdentity(client.getContext().user);
+
+  const scheduleRefresh = (identity: string, attempt = 0): void => {
+    const delayMs = STATSIG_REFRESH_DELAYS_MS[attempt];
+    if (delayMs === undefined) return;
     schedule(() => {
-      if (
-        !active ||
-        generation !== cacheGeneration ||
-        refreshing ||
-        identity !== targetingIdentity(client.getContext().user)
-      )
-        return;
+      if (!isCurrentIdentity(identity) || refreshing) return;
       refreshing = true;
+      mark("refresh-start");
+      const retry = (): void => {
+        if (!isCurrentIdentity(identity)) return;
+        mark("refresh-failed");
+        if (attempt + 1 < STATSIG_REFRESH_DELAYS_MS.length)
+          scheduleRefresh(identity, attempt + 1);
+        else mark("refresh-exhausted");
+      };
       void client
         .refreshValuesAsync({ timeoutMs: 15_000 })
-        .then(() => saveNetworkSnapshot())
-        .catch(() => {})
+        .then((result) => {
+          if (!isCurrentIdentity(identity)) return;
+          // Ready/HTTP completion alone does not mean the SDK applied values.
+          // Its timeout can leave late network data only in the adapter cache;
+          // a subsequent native refresh must apply it to the evaluation store.
+          if (result.success === false || !isObject(client.getContext().values)) {
+            retry();
+            return;
+          }
+          mark("refresh-succeeded");
+          void saveNetworkSnapshot().catch(() => {});
+        })
+        .catch(retry)
         .finally(() => {
           refreshing = false;
         });
-    });
+    }, delayMs);
   };
 
   client.initializeAsync = (options?: unknown) => {
@@ -401,7 +422,7 @@ export function configureStatsigClient<T extends StatsigClientLike>(
             ? Math.min(requestedTimeout, STATSIG_STARTUP_TIMEOUT_MS)
             : STATSIG_STARTUP_TIMEOUT_MS,
       });
-      if (result.success === false) {
+      if (result.success === false || !isObject(client.getContext().values)) {
         mark("network-deferred");
         scheduleRefresh(targetingIdentity(client.getContext().user));
       }
