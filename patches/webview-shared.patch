@@ -35,7 +35,7 @@
          }
          async sendRequest(e, t, n) {
 +          return window.__ELECTRON_SHIM__.appHost.nativeRequest(e,
-+            timeoutMs => this.sendRequestOnce(e, t, timeoutMs == null ? n : { ...n, priority: "critical", timeoutMs: Math.min(n?.timeoutMs > 0 ? n.timeoutMs : Infinity, timeoutMs) }), this.hostId, t);
++            timeoutMs => this.sendRequestOnce(e, t, timeoutMs == null ? n : { ...n, priority: "critical", timeoutMs: Math.min(n?.timeoutMs > 0 ? n.timeoutMs : Infinity, timeoutMs) }), this.hostId, t, n?.codexWebOptionalRead === true);
 +        }
 +        async sendRequestOnce(e, t, n) {
            if (this.dispatchMessage == null)

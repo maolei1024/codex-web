@@ -1,0 +1,43 @@
+--- a/webview/assets/app-shared-59042e7300f7.js
++++ b/webview/assets/app-shared-59042e7300f7.js
+@@ -153607,7 +153607,7 @@
+     .sendRequest(
+       `config/read`,
+       { cwd: lN(e.hostId) ? null : t, includeLayers: !1 },
+-      { priority: n, timeoutMs: 500 },
++      { priority: n, timeoutMs: 500, codexWebOptionalRead: true },
+     )
+     .then((e) => UB(e.config))
+     .catch(() => null);
+@@ -171788,6 +171788,7 @@
+     requestDurationMs: t - r,
+     source: e.source,
+     timeoutMs: e.timeoutMs,
++    codexWebOptionalRead: e.codexWebOptionalRead,
+     ...(e.trace == null ? {} : { trace: e.trace }),
+     hostMetrics: n,
+   };
+@@ -172191,6 +172192,7 @@
+               source: t.source,
+               startedAtMs: t.startedAtMs,
+               timeoutMs: t.timeoutMs,
++              codexWebOptionalRead: t.codexWebOptionalRead,
+               clientUserMessageId: t.clientUserMessageId,
+             });
+         }
+@@ -172200,6 +172202,7 @@
+             priority: Eun(`config/read`, t),
+             source: _un(`config/read`, t?.source),
+             timeoutMs: t?.timeoutMs ?? 0,
++            codexWebOptionalRead: t?.codexWebOptionalRead === true,
+             trace: t?.trace === void 0 ? `auto` : t.trace,
+           });
+           {
+@@ -172289,6 +172292,7 @@
+             v = new Promise((t, s) => {
+               let c = {
+                 clientUserMessageId: n?.clientUserMessageId,
++                codexWebOptionalRead: n?.codexWebOptionalRead === true,
+                 onOutcomeUnknown: PQt(e) ? n?.onOutcomeUnknown : void 0,
+                 outcomeUnknown: !1,
+                 capacityReleased: !1,

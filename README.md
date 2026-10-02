@@ -92,10 +92,14 @@ replayed. Required configuration errors remain errors, with a retry notice outsi
 the React tree. Recovery retains the route, rendered history, editor and attachments;
 it does not remount the app or simulate a page refresh. Each browser channel owns its
 callback lifetime, so closing one tab cannot unregister another tab's callbacks.
-After the AppHost handshake, an idle gap waiting for lazy UI assets pauses the
-remaining startup budget. Any startup read resumes that same budget; outstanding
-RPCs and retries remain bounded. Cancelling an obsolete browser fetch rejects its
-caller without exhausting recovery for the page.
+During initial startup, idle gaps between read batches waiting for lazy UI assets
+pause the remaining budget, including gaps after configuration has loaded. Any
+startup read resumes that same budget; outstanding RPCs and retries remain bounded.
+Recovery of an already ready page retains its wall-clock deadline. Cancelling an
+obsolete browser fetch rejects its caller without exhausting recovery for the page.
+Desktop's optional 500 ms configuration hint before conversation resume keeps its
+original null fallback. Its lifecycle is separate from required configuration,
+so a slow hint cannot exhaust page recovery or clear a real configuration failure.
 An internal AppHost disconnect also rejects pending native app-server requests,
 even while its WebSocket is open. Conversation resume reads have the same bounded
 wait; an old zero-timeout resume cannot trap later recovery behind its Promise.

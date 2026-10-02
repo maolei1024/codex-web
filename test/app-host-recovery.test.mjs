@@ -409,6 +409,66 @@ test("lazy asset download time does not consume the foreground configuration dea
   );
 });
 
+test("initial startup excludes idle asset gaps between required native read batches", async (t) => {
+  const env = setup(t, undefined, { requiresHistory: () => true });
+  const services = await env.coordinator.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of [
+    "config/read",
+    "configRequirements/read",
+    "model/list",
+    "thread/resume",
+  ]) {
+    // Each lazy module can arrive well after earlier native reads completed.
+    t.mock.timers.tick(180_000);
+    env.coordinator.checkDeadlines();
+    assert.equal(env.coordinator.failed, false);
+    assert.equal(env.coordinator.everReady, false);
+    env.coordinator.observeNative({ method, type: "started" });
+    t.mock.timers.tick(10_000);
+    env.coordinator.observeNative({ method, type: "completed" });
+  }
+  assert.equal(env.coordinator.everReady, true);
+  t.mock.timers.tick(180_000);
+  assert.equal(env.coordinator.failed, false);
+
+  // Recovery of an already mounted page must remain bounded, even if the
+  // native host never emits the configuration/history events we need.
+  env.coordinator.disconnect();
+  await env.coordinator.recover();
+  t.mock.timers.tick(60_000);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, true);
+});
+
+test("later native startup batches resume only the unspent request budget", async (t) => {
+  const env = setup(t, undefined, { requiresHistory: () => true });
+  const services = await env.coordinator.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of [
+    "config/read",
+    "configRequirements/read",
+    "model/list",
+  ]) {
+    env.coordinator.observeNative({ method, type: "started" });
+    t.mock.timers.tick(10_000);
+    env.coordinator.observeNative({ method, type: "completed" });
+    t.mock.timers.tick(180_000);
+    env.coordinator.checkDeadlines();
+    assert.equal(env.coordinator.failed, false);
+  }
+  env.coordinator.observeNative({ method: "thread/resume", type: "started" });
+  t.mock.timers.tick(29_999);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, false);
+  t.mock.timers.tick(1);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, true);
+  assert.equal(env.coordinator.everReady, false);
+});
+
 test("a startup fetch during the lazy module gap resumes the bounded budget", async (t) => {
   const env = setup(t);
   const services = await env.coordinator.start();
@@ -610,6 +670,76 @@ test("optional durable authentication errors do not exhaust local startup recove
   await settle();
   assert.equal(env.coordinator.diagnostics().exhausted, false);
   assert.equal(env.coordinator.diagnostics().stages.models.state, "completed");
+});
+
+test("the upstream optional resume hint can time out without exhausting page recovery", async (t) => {
+  const env = setup(t);
+  const services = await env.coordinator.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    env.coordinator.observeNative({ method, type: "completed" });
+  env.coordinator.disconnect();
+  await env.coordinator.recover();
+  const requests = [];
+  const { nativeRequestClient } = await import("./desktop-request-harness.mjs");
+  const { client, readOptionalConfig } = await nativeRequestClient(
+    (_type, message) => requests.push(message.request),
+    (event) => env.coordinator.observeNative(event),
+    env.coordinator,
+  );
+  const hint = readOptionalConfig(client, "/project");
+  await settle();
+  t.mock.timers.tick(500);
+  assert.equal(await hint, null, "retain Desktop's original fallback");
+  assert.equal(requests.length, 1, "optional lookups must not retry");
+  assert.equal(env.coordinator.failed, false);
+  assert.deepEqual(env.coordinator.diagnostics().requiredFailures, []);
+  assert.equal(
+    env.coordinator.diagnostics().stages.configuration.state,
+    "waiting",
+  );
+
+  // A necessary read on the same host still gates readiness and may take
+  // longer than the optional hint's deadline without ending global recovery.
+  const required = client.sendRequest(
+    "config/read",
+    { cwd: "/project" },
+    { trace: null },
+  );
+  await settle();
+  t.mock.timers.tick(1000);
+  client.onResult(requests.at(-1).id, { config: {} });
+  await required;
+  for (const method of ["configRequirements/read", "model/list"])
+    env.coordinator.observeNative({ method, type: "completed" });
+  t.mock.timers.tick(61_000);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, false);
+});
+
+test("a successful optional hint cannot erase a required configuration failure", async (t) => {
+  const env = setup(t);
+  await env.coordinator.start();
+  env.coordinator.observeNative({ method: "config/read", type: "failed" });
+  const { nativeRequestClient } = await import("./desktop-request-harness.mjs");
+  const { client, readOptionalConfig } = await nativeRequestClient(
+    (_type, { request }) =>
+      queueMicrotask(() => client.onResult(request.id, { config: {} })),
+    (event) => env.coordinator.observeNative(event),
+    env.coordinator,
+  );
+  await readOptionalConfig(client, "/project");
+  assert.deepEqual(env.coordinator.diagnostics().requiredFailures, [
+    "local:config/read",
+  ]);
+  assert.equal(
+    env.coordinator.diagnostics().stages.configuration.state,
+    "failed",
+  );
+  t.mock.timers.tick(61_000);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, true);
 });
 
 test("disconnect before dispatch cannot turn a rejected write into a late mutation", async (t) => {

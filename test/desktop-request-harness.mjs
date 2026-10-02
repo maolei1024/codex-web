@@ -16,6 +16,14 @@ export async function nativeRequestClient(
   const end = /\)?\s*,\s*\(?Vun\s*=\s*class/.exec(rest);
   assert.ok(start && end, "pinned Desktop request client must exist");
   const code = rest.slice(rest.indexOf("class"), end.index);
+  const lifecycleMetrics = source.slice(
+    source.indexOf("function xun("),
+    source.indexOf("function Sun("),
+  );
+  const optionalConfig = source.slice(
+    source.indexOf("async function xen("),
+    source.indexOf("function Sen("),
+  );
   let sequence = 0;
   const errors = [];
   const context = {
@@ -60,7 +68,7 @@ export async function nativeRequestClient(
     p6() {},
     o6: () => null,
     Dun: (error) => error,
-    xun: () => ({}),
+    xun: vm.runInNewContext(`(${lifecycleMetrics})`),
     Sun: () => Promise.resolve(),
     SR: class extends Error {
       constructor(delivery, message) {
@@ -71,5 +79,14 @@ export async function nativeRequestClient(
     },
   };
   const Client = vm.runInNewContext(`(${code})`, context);
-  return { Client, errors, client: new Client("local", dispatch) };
+  const readOptionalConfig = vm.runInNewContext(`(${optionalConfig})`, {
+    lN: () => false,
+    UB: (config) => config,
+  });
+  return {
+    Client,
+    errors,
+    client: new Client("local", dispatch),
+    readOptionalConfig,
+  };
 }

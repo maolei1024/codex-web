@@ -114,7 +114,6 @@ export class AppHostRecovery {
   private initialSettings = false;
   private initialStartup = false;
   private everReady = false;
-  private readinessStarted = false;
   private cycleTimer?: ReturnType<typeof setTimeout>;
   constructor(
     private readonly now = Date.now,
@@ -173,6 +172,7 @@ export class AppHostRecovery {
     id?: string | number;
     conversationId?: string;
     params?: { threadId?: string };
+    codexWebOptionalRead?: boolean;
     type: string;
     durationMs?: number;
   }) {
@@ -196,6 +196,9 @@ export class AppHostRecovery {
       this.now() - (event.durationMs ?? 0),
       event.type,
     );
+    // Desktop's bounded resume hint deliberately falls back when unavailable.
+    // Its result cannot satisfy or invalidate required startup configuration.
+    if (event.codexWebOptionalRead) return;
     const key = JSON.stringify([event.hostId ?? "local", event.id]);
     const threadId =
       event.params?.threadId ??
@@ -207,7 +210,7 @@ export class AppHostRecovery {
     // Desktop preloads other hosts and sidebar conversations during startup.
     // Their missing histories/authentication must fail only their own callers.
     if (!this.requiredNativeRead(event.method!, event.hostId, threadId)) return;
-    this.beginReadiness();
+    this.resumeCycle();
     // Native clients also report background reads and write preparation. Their
     // errors belong to the caller, not to a completed startup cycle. In
     // particular, an inactive thread read must not poison the next foreground
@@ -243,17 +246,25 @@ export class AppHostRecovery {
     const reading =
       this.connecting ||
       this.retrying ||
-      [...this.pending].some((request) => request.required);
+      [...this.pending].some((request) => request.required) ||
+      Object.values(this.stages).some((stage) => stage.state === "started");
     if (reading || this.requiredFailures.size || this.exhausted) return;
-    // AppHost can finish its handshake before the lazy UI module has loaded.
-    // Pause only that idle gap: any real read resumes the same remaining budget.
     if (
-      !this.everReady &&
-      !this.readinessStarted &&
-      this.current &&
-      this.cycle
+      !this.initialSettings ||
+      !this.initialStartup ||
+      (this.requiresHistory() && this.stages.history?.state !== "completed") ||
+      ["configuration", "requirements", "models"].some(
+        (key) => this.stages[key]?.state !== "completed",
+      )
     ) {
+      // Lazy UI modules issue startup reads in separate batches. Exclude each
+      // idle asset gap, even after configuration has completed, while retaining
+      // the time already spent on real requests and retries. Once the page has
+      // been ready, recovery must still finish within its wall-clock deadline.
       if (
+        !this.everReady &&
+        this.current &&
+        this.cycle &&
         Number.isFinite(this.cycle.deadline) &&
         this.now() < this.cycle.deadline
       ) {
@@ -263,16 +274,6 @@ export class AppHostRecovery {
       }
       return;
     }
-    if (
-      !this.initialSettings ||
-      !this.initialStartup ||
-      (this.requiresHistory() && this.stages.history?.state !== "completed") ||
-      Object.values(this.stages).some((stage) => stage.state === "started") ||
-      ["configuration", "requirements", "models"].some(
-        (key) => this.stages[key]?.state !== "completed",
-      )
-    )
-      return;
     this.changed?.("connected", "startup");
     this.everReady = true;
     clearTimeout(this.cycleTimer);
@@ -283,15 +284,16 @@ export class AppHostRecovery {
     operation: (timeoutMs?: number) => Promise<T>,
     hostId?: string,
     params?: { threadId?: string },
+    optionalRead = false,
   ): Promise<T> {
     // Once ready, a read preparing a user write fails back to that caller. It
     // must never keep a pending send alive until a later automatic recovery.
     if (
+      optionalRead ||
       !this.requiredNativeRead(method, hostId, params?.threadId) ||
       (this.everReady && !this.cycle)
     )
       return operation();
-    this.beginReadiness();
     return this.retry(method, async () => {
       const cycle = this.budget();
       try {
@@ -354,11 +356,6 @@ export class AppHostRecovery {
       throw new RecoveryError("services", "timeout");
     }
     return cycle;
-  }
-  private beginReadiness() {
-    if (this.readinessStarted) return;
-    this.readinessStarted = true;
-    this.resumeCycle();
   }
   private resumeCycle() {
     if (this.cycle?.remainingMs != null) {
