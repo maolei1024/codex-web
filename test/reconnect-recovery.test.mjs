@@ -51,6 +51,58 @@ test("fresh real initialization supersedes replay; disconnected remote waits unt
   assert.equal(recovery.pending()[0].hostId, "remote");
 });
 
+test("websocket SSH recovery replays its real connected snapshot before initialization", () => {
+  const recovery = new ReconnectRecovery();
+  const remote = { ...initialized("remote"), transport: "websocket" };
+  const connected = {
+    type: "codex-app-server-connection-changed",
+    hostId: "remote",
+    transport: "websocket",
+    state: "connected",
+    progress: null,
+    error: null,
+    isSnapshot: true,
+  };
+  recovery.observe(remote);
+  recovery.begin();
+  assert.deepEqual(
+    recovery.pending(),
+    [],
+    "initialization alone cannot assert connectivity",
+  );
+  recovery.observe(connected);
+  assert.deepEqual(recovery.pending(), [
+    { ...connected, isSnapshot: false },
+    { ...remote, isSnapshot: false },
+  ]);
+  assert.deepEqual(recovery.pending(), []);
+  assert.equal(connected.isSnapshot, true);
+
+  recovery.begin();
+  recovery.observe({ ...connected, state: "error" });
+  assert.deepEqual(
+    recovery.pending(),
+    [],
+    "an old initialized host must not look connected",
+  );
+  recovery.observe(connected);
+  assert.equal(recovery.pending().length, 2);
+});
+
+test("a real websocket reconnect already triggers native stream recovery and is not replayed", () => {
+  const recovery = new ReconnectRecovery();
+  recovery.observe({ ...initialized("remote"), transport: "websocket" });
+  recovery.begin();
+  recovery.observe({
+    type: "codex-app-server-connection-changed",
+    hostId: "remote",
+    transport: "websocket",
+    state: "connected",
+    isSnapshot: false,
+  });
+  assert.deepEqual(recovery.pending(), []);
+});
+
 test("foreground probes coalesce and a matching pong preserves the healthy connection", () => {
   let now = 0,
     failures = 0,

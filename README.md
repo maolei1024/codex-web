@@ -101,6 +101,9 @@ even while its WebSocket is open. Conversation resume reads have the same bounde
 wait; an old zero-timeout resume cannot trap later recovery behind its Promise.
 An RPC timeout on a healthy WebSocket also schedules the full settings and native
 configuration recovery, so a caller reconnect cannot leave startup waiting forever.
+WebSocket-backed SSH hosts also replay their real connected snapshot. The pinned
+Desktop restores their conversation streams on that event; initialization alone
+only refreshes metadata. Failed or disconnected hosts are never marked connected.
 The native startup gate also reacquires readiness after recovery. An expired startup
 Promise must not trap React on its error page after a slow module download. A healthy
 root retains its editor; only a failed transport error boundary is reset.
