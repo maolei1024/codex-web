@@ -1,0 +1,298 @@
+--- a/webview/assets/app-initial-60d038a052d7.js
++++ b/webview/assets/app-initial-60d038a052d7.js
+@@ -164571,6 +164571,7 @@
+         attachmentOrder: r.attachmentOrder.filter((e) => t.has(e)),
+       });
+     }
++    if (r.imageAttachments !== n.imageAttachments) window.__ELECTRON_SHIM__.imageDrafts.save(X7n(e), r.imageAttachments);
+     e.set(Xdr, r);
+   }
+ }
+@@ -165065,7 +165066,10 @@
+             t.value.kind === `local`
+               ? t.value
+               : { clientThreadId: null, conversationId: null };
+-          return t.watch(({ get: e }) => {
++          const stopImageDraft = window.__ELECTRON_SHIM__.imageDrafts.mount(
++            X7n(t), () => t.get(fR).imageAttachments,
++            images => rR(t, state => { state.imageAttachments = images; }));
++          const stopDesktopWatch = t.watch(({ get: e }) => {
+             if (i == null) return;
+             let n = e(Wdr, i),
+               r = a ?? (au(i) ? e(Vl, i) : null),
+@@ -165084,6 +165088,7 @@
+                 }),
+                 t.set(Wdr, i, [])));
+           });
++          return () => { stopImageDraft(); stopDesktopWatch(); };
+         },
+       })),
+       (Zdr = Ko(pS, ({ get: e, scope: t }) => {
+@@ -189273,6 +189278,7 @@
+     n = $se(e.appVersion),
+     r = e.buildFlavor !== `prod`;
+   (aBr({
++    enabled: !1,
+     beforeBreadcrumb: Hue,
+     beforeSend: KWe,
+     dsn: e.dsn,
+@@ -201747,6 +201753,9 @@
+       (r[3] = a))
+     : (a = r[3]);
+   let o = a;
++  window.__ELECTRON_SHIM__.closeSidebar = () => {
++    XIt(e, !1, { animate: t });
++  };
+   nH(`toggleSidebar`, o);
+   let s;
+   (r[4] !== i || r[5] !== e || r[6] !== t
+@@ -202721,7 +202730,7 @@
+         "--app-shell-root-banner-height": le,
+         "--app-shell-navigation-rail-width": dt,
+         "--app-shell-application-menu-height": ft,
+-        "--spacing-token-safe-header-left": pt,
++        "--spacing-token-safe-header-left": `0px`,
+         "--spacing-token-safe-header-right": mt,
+         "--app-shell-animated-left-panel-width": void 0,
+         width: `calc(100vw / var(--codex-window-zoom))`,
+@@ -301625,12 +301634,15 @@
+     ? (i = t[1])
+     : ((i = () =>
+         Sye([{ path: `*`, Component: fSa, ErrorBoundary: pSa }], {
+-          initialEntries: r,
++          initialEntries: r ?? [window.__ELECTRON_SHIM__.initialRoute],
+         })),
+       (t[0] = r),
+       (t[1] = i));
+   let [a] = (0, hSa.useState)(i),
+     o;
++  hSa.useEffect(() => a.subscribe(state => {
++    window.__ELECTRON_SHIM__.onMemoryNavigationChanged({ action: state.historyAction, location: state.location });
++  }), [a]);
+   t[2] === a
+     ? (o = t[3])
+     : ((o = (0, gSa.jsx)(tn, { router: a, useTransitions: !1 })),
+@@ -492795,7 +492807,9 @@
+     { client: n } = e,
+     r = Ah(q),
+     [, i] = Al(`statsig_default_enable_features`),
+-    [, a] = Al(`statsig_evaluations`),
++    // Atom get/set also briefly mounts a subscription. This publisher must
++    // never read the shared snapshot; keep its deduplication state locally.
++    a = RPs.useRef(null),
+     o,
+     s;
+   (t[0] !== n || t[1] !== r
+@@ -492814,18 +492828,10 @@
+             let t = e?.status ?? n.loadingStatus;
+             kPs(n, t).catch(FPs);
+             let o = wPs(n);
+-            (0, LPs.default)(gd(r.get, `statsig_evaluations`), o) ||
+-              (Nu.debug(`Publishing Statsig execution evaluations`, {
+-                safe: {
+-                  status: t,
+-                  unifiedProjects:
+-                    o.payload == null
+-                      ? null
+-                      : o.executionValues.unifiedProjects,
+-                },
+-                sensitive: {},
+-              }),
+-              a(o));
++            if (!(0, LPs.default)(a.current, o)) {
++              a.current = o;
++              _s.dispatchMessage(`shared-object-set`, { key: `statsig_evaluations`, value: o });
++            }
+             let s =
+               o.payload === void 0
+                 ? void 0
+@@ -493991,6 +493997,7 @@
+ function cFs(e) {
+   let t = {
+     ...bFs,
++    overrideAdapter: window.__ELECTRON_SHIM__.overrideAdapter,
+     enableLiveValuesAutoRefresh: !0,
+     ...(e === !0 ? {} : { disableStorage: !0, loggingEnabled: `disabled` }),
+   };
+@@ -528253,6 +528260,7 @@
+   }))();
+ }
+ function Ftc(e) {
++  window.__ELECTRON_SHIM__.registerQueryClient(Sf());
+   let t = (0, Itc.c)(3),
+     { children: n } = e;
+   if (nt()) {
+@@ -545048,6 +545056,13 @@
+   return nVe(Obs);
+ }
+ function Byc() {
++  const location = os(), hosts = Z(ra), mountedHost = Z5.useRef(null);
++  const host = new URLSearchParams(location.search).get("hostId");
++  const waiting = host != null && !hosts.includes(host) && mountedHost.current !== host;
++  if (!waiting) mountedHost.current = host;
++  return waiting ? Q5.jsx(v8, { debugName: "Remote host" }) : Q5.jsx(codexWebReadyRoute, {});
++}
++function codexWebReadyRoute() {
+   let e = (0, X5.c)(63),
+     t = Ah(q),
+     n = (0, Z5.useRef)(!1),
+@@ -545749,64 +545764,34 @@
+       (cbc = { fallbackDragRegion: sbc }));
+   }))();
+ }
+-function ubc(e) {
+-  let t = (0, fbc.c)(5),
+-    { startupReady: n } = e,
+-    r;
+-  t[0] === Symbol.for(`react.memo_cache_sentinel`)
+-    ? ((r =
+-        !mbc && !hbc
+-          ? (0, t7.jsx)(t7.Fragment, {
+-              children: (0, t7.jsx)(`div`, {
+-                "aria-hidden": !0,
+-                className: As(
+-                  `pointer-events-none fixed inset-x-0 top-0 h-toolbar draggable`,
+-                  cbc.fallbackDragRegion,
+-                ),
+-              }),
+-            })
+-          : null),
+-      (t[0] = r))
+-    : (r = t[0]);
+-  let i;
+-  t[1] === Symbol.for(`react.memo_cache_sentinel`)
+-    ? ((i = (0, t7.jsx)(wxa, {})), (t[1] = i))
+-    : (i = t[1]);
+-  let a;
+-  t[2] === Symbol.for(`react.memo_cache_sentinel`)
+-    ? ((a =
+-        !mbc && !hbc && !gbc && Se.startup != null
+-          ? (0, t7.jsx)(`span`, { ref: dbc, "aria-hidden": !0, hidden: !0 })
+-          : null),
+-      (t[2] = a))
+-    : (a = t[2]);
+-  let o;
+-  return (
+-    t[3] === n
+-      ? (o = t[4])
+-      : ((o = (0, t7.jsxs)(pbc.StrictMode, {
+-          children: [
+-            r,
+-            (0, t7.jsxs)(XB, {
+-              name: `App`,
+-              fallback: i,
+-              onError: void 0,
+-              children: [
+-                a,
+-                n == null
+-                  ? (0, t7.jsx)(Pyc, {})
+-                  : (0, t7.jsx)(pbc.Suspense, {
+-                      fallback: (0, t7.jsx)(v8, { debugName: `Startup` }),
+-                      children: (0, t7.jsx)(Pyc, { startupReady: n }),
+-                    }),
+-              ],
+-            }),
+-          ],
+-        })),
+-        (t[3] = n),
+-        (t[4] = o)),
+-    o
+-  );
++function ubc({ required, markReady }) {
++  const [ready, setReady] = pbc.useState(!required);
++  const [revision, setRevision] = pbc.useState(0);
++  const readyRef = pbc.useRef(!required), errorRef = pbc.useRef(null);
++  pbc.useEffect(() => {
++    let active = true, sequence = 0;
++    const read = () => {
++      if (readyRef.current) return;
++      const attempt = ++sequence;
++      Promise.resolve().then(() => Se.startup.whenReady()).then(value => {
++        if (!active || attempt !== sequence) return;
++        markReady(value); readyRef.current = true; setReady(true);
++      }, () => {});
++    };
++    const remove = window.__ELECTRON_SHIM__.appHost.onRestored(() => {
++      if (!active) return;
++      read();
++      if (errorRef.current == null || window.__ELECTRON_SHIM__.isTransportFailure(errorRef.current)) setRevision(v => v + 1);
++    });
++    read();
++    return () => { active = false; sequence++; remove(); };
++  }, [required, markReady]);
++  return t7.jsxs(pbc.StrictMode, { children: [
++    !mbc && !hbc ? t7.jsx(`div`, { "aria-hidden": true, className: As(`pointer-events-none fixed inset-x-0 top-0 h-toolbar draggable`, cbc.fallbackDragRegion) }) : null,
++    t7.jsxs(XB, { name: `App`, resetKey: revision, fallback: t7.jsx(wxa, {}),
++      onError: error => { errorRef.current = error; }, onReset: () => { errorRef.current = null; },
++      children: [!mbc && !hbc && !gbc && Se.startup != null ? t7.jsx(`span`, { ref: dbc, "aria-hidden": true, hidden: true }) : null,
++        ready ? t7.jsx(Pyc, {}) : t7.jsx(v8, { debugName: `Startup` })] })] });
+ }
+ function dbc(e) {
+   e != null && (Zo.markInitializationPhase(`renderer_ready`), szi());
+@@ -545861,10 +545846,7 @@
+   Nu.info(`[statsig-refresh-diagnostics] React root render requested`, {
+     safe: { windowType: `electron` },
+   });
+-  let e =
+-    Tbc || Ebc || Dbc || Se.startup?.whenReady == null
+-      ? void 0
+-      : Promise.resolve(Se.startup.whenReady()).then((e) => {
++  const markReady = e => {
+           try {
+             var t = zi();
+             let n = t.u(e),
+@@ -545879,8 +545861,9 @@
+           } finally {
+             t.d();
+           }
+-        });
+-  return (0, Cbc.jsx)(ubc, { startupReady: e });
++
++  };
++  return Cbc.jsx(ubc, { required: !Tbc && !Ebc && !Dbc && Se.startup?.whenReady != null, markReady });
+ }
+ async function Sbc() {}
+ var Cbc, wbc, Tbc, Ebc, Dbc, Obc, kbc, Abc, jbc;
+@@ -561372,13 +561355,15 @@
+             : EL({ schema: x, text: e })),
+     R != null && d != null && !p && (R = Fir(R, d, e ?? void 0)));
+   let z = d == null ? null : PNc(p ? d : null, (e) => wNc(y, e)),
++    inputModeDisabled = false,
++    getAttributes = () => ({ "aria-multiline": `true`, dir: `auto`, role: `textbox`, spellcheck: `true`, ...(inputModeDisabled ? {} : { inputmode: `none` }) }),
++    setPointerInputMode = value => {
++      if (inputModeDisabled === value) return;
++      inputModeDisabled = value;
++      if (!B.isDestroyed) B.setProps({ attributes: getAttributes });
++    },
+     B = new VIe(null, {
+-      attributes: {
+-        "aria-multiline": `true`,
+-        dir: `auto`,
+-        role: `textbox`,
+-        spellcheck: `true`,
+-      },
++      attributes: getAttributes,
+       transformPastedText: A.transformPastedText,
+       transformPastedHTML(e) {
+         if ((A.transformPastedHTML(e), e.length > 1e5)) return ` `;
+@@ -561548,8 +561533,10 @@
+           S.dispatchEvent(new m7n(e)));
+       },
+       handleDOMEvents: {
++        touchstart() { setPointerInputMode(true); return false; },
++        blur() { setPointerInputMode(false); return false; },
+         keydown: (e, t) => A.handleKeyEvent(t),
+-        mousedown: (e, t) => A.handleMouseDown(t),
++        mousedown: (e, t) => { setPointerInputMode(true); return A.handleMouseDown(t); },
+         keyup(e, t) {
+           A.handleKeyEvent(t);
+           let { $from: n, empty: r } = e.state.selection;
+@@ -598832,7 +598819,7 @@
+     c = os(),
+     l = Ed(),
+     u = n != null,
+-    d = o?.prefillPrompt,
++    d = o?.prefillPrompt ?? new URLSearchParams(c.search).get(`prompt`),
+     f = o?.prefillPromptFormat,
+     p = o?.prefillPromptOnlyIfEmpty,
+     m = o?.prefillLibraryFolders,

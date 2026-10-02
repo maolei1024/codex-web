@@ -2,10 +2,9 @@
 set -euxo pipefail
 
 TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
-APP_VERSION="26.901.41123"
-curl -o "$TEMP_DIR/file.zip" "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-$APP_VERSION.zip"
+APP_VERSION="$(node -p 'require("./local-build.json").desktopVersion')"
+curl --fail --location --retry 3 -o "$TEMP_DIR/file.zip" "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-$APP_VERSION.zip"
 
 HOSTED_CODEX_APP_ZIP="$TEMP_DIR/file.zip" bash ./scripts/prepare_asar
-
-rm -rf "$TEMP_DIR"

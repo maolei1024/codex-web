@@ -8,17 +8,20 @@ export async function nativeRequestClient(
   appHost = { nativeRequest: (_method, operation) => operation() },
 ) {
   const source = await readFile(
-    "scratch/asar/webview/assets/app-initial-236e1501144c.js",
+    "scratch/asar/webview/assets/app-shared-59042e7300f7.js",
     "utf8",
   );
-  const start = /ECn\s*=\s*(class)/.exec(source);
+  const start = /Bun\s*=\s*(class)/.exec(source);
   const rest = source.slice(start?.index ?? 0);
-  const end = /,\s*DCn\s*=\s*class/.exec(rest);
+  const end = /\)?\s*,\s*\(?Vun\s*=\s*class/.exec(rest);
   assert.ok(start && end, "pinned Desktop request client must exist");
   const code = rest.slice(rest.indexOf("class"), end.index);
   let sequence = 0;
   const errors = [];
   const context = {
+    wun: () => false,
+    xP: () => null,
+    _un: (_method, source) => source ?? "test",
     window: {
       setTimeout,
       clearTimeout,
@@ -27,7 +30,7 @@ export async function nativeRequestClient(
     Date,
     DOMException,
     Error,
-    hCn: {
+    kun: {
       default: (fn, { normalizer }) => {
         const cache = new Map();
         const memo = (...args) => {
@@ -39,27 +42,27 @@ export async function nativeRequestClient(
         return memo;
       },
     },
-    Wg: String,
-    rp: () => `native-${++sequence}`,
-    YSn: (params) => params?.threadId,
-    fCn: (_method, options) => options?.priority ?? "interactive",
-    $T: (_method, source) => source ?? "test",
-    F0t: (method) =>
+    xj: String,
+    sE: () => `native-${++sequence}`,
+    sun: (params) => params?.threadId,
+    Eun: (_method, options) => options?.priority ?? "interactive",
+    Tun: (_method, source) => source ?? "test",
+    PQt: (method) =>
       ["thread/start", "turn/start", "turn/steer"].includes(method),
-    TCn: new Set(),
-    bCn: { interactive: 64, background: 128, critical: 16 },
-    _Cn: 6,
-    vCn: 5,
-    yCn: 3,
-    SCn: 4,
-    xCn: 30_000,
-    T: { debug() {}, warning() {}, error: (...args) => errors.push(args) },
-    uX() {},
-    fRt: () => null,
-    pCn: (error) => error,
-    uCn: () => ({}),
-    dCn: () => Promise.resolve(),
-    hS: class extends Error {
+    zun: new Set(),
+    Pun: { interactive: 64, background: 128, critical: 16 },
+    jun: 6,
+    Mun: 5,
+    Nun: 3,
+    Iun: 4,
+    Fun: 30_000,
+    mf: { debug() {}, warning() {}, error: (...args) => errors.push(args) },
+    p6() {},
+    o6: () => null,
+    Dun: (error) => error,
+    xun: () => ({}),
+    Sun: () => Promise.resolve(),
+    SR: class extends Error {
       constructor(delivery, message) {
         super(message);
         this.delivery = delivery;

@@ -167,64 +167,101 @@ test("draft checkpoint reports attachments that are still being read", async () 
 
 test("Desktop composer mutations save images only when changed, including send/reset", async () => {
   const bundle = await readFile(
-    "scratch/asar/webview/assets/app-initial-236e1501144c.js",
+    "scratch/asar/webview/assets/app-initial-60d038a052d7.js",
     "utf8",
   );
-  const start = bundle.indexOf("function s0(");
-  const end = bundle.indexOf("function ito(", start);
+  const start = bundle.indexOf("function rR(");
+  const end = bundle.indexOf("function Kur(", start);
   assert.ok(start > 0 && end > start);
-  let state = { imageAttachments: [image] };
+  let state = {
+    imageAttachments: [image],
+    attachmentOrder: [],
+    imageCommentDrafts: [],
+    appshotContexts: [],
+    fileAttachments: [],
+    pastedTextAttachments: [],
+    uploadedFileAttachments: [],
+    addedFiles: [],
+    mcpAppModelContextAttachments: [],
+    selectedTextAttachments: [],
+    responseTextAnnotations: [],
+    pullRequestChecks: [],
+  };
   const saved = [],
     home = [];
   const context = {
-    m0: "view",
-    Jto: "view",
-    qto: "home",
-    pS: (value, update) => {
-      const next = { ...value };
+    a9n: (_old, next) =>
+      next.imageAttachments.map((image) => `image:${image.id}`),
+    aL: (type, id) => `${type}:${id}`,
+    dR: "draft",
+    _R: "context",
+    gfr: "attachment",
+    mnr() {},
+    Enr() {},
+    mfr: "context",
+    fR: "view",
+    Xdr: "view",
+    Gdr: "home",
+    vWe: (value, update) => {
+      const next = {
+        ...value,
+        ...Object.fromEntries(
+          Object.entries(value)
+            .filter(([, v]) => Array.isArray(v))
+            .map(([k, v]) => [k, [...v]]),
+        ),
+      };
       update(next);
+      for (const [key, old] of Object.entries(value))
+        if (
+          Array.isArray(old) &&
+          Array.isArray(next[key]) &&
+          old.length === next[key].length &&
+          old.every((item, index) => item === next[key][index])
+        )
+          next[key] = old;
       return next;
     },
-    H1a: (scope) => scope.value.key,
-    rK: (value) => value.key,
+    X7n: (scope) => scope.value.key,
+    fS: (value) => value.key,
     window: {
       __ELECTRON_SHIM__: {
         imageDrafts: { save: (key, images) => saved.push({ key, images }) },
       },
     },
-    Lxn() {},
-    bto() {},
-    w0a() {},
-    T$a() {},
-    c0() {},
-    Weo() {},
-    W1a() {},
-    ino: "i",
-    Lto: "l",
-    dno: "d",
-    Uto: "u",
+    L7n() {},
+    nR() {},
+    kur() {},
+    Q7n() {},
+    udr() {},
+    g7n() {},
+    pee() {},
+    Odr: "i",
+    sfr: "l",
+    cnr: "d",
+    Vdr: "u",
   };
-  const { s0, rto } = vm.runInNewContext(
-    `${bundle.slice(start, end)}; ({s0, rto})`,
+  const { rR, Gur } = vm.runInNewContext(
+    `${bundle.slice(start, end)}; ({rR, Gur})`,
     context,
   );
   const scope = {
     value: { kind: "new", entrypoint: "home", key: "home" },
-    get: () => state,
-    set: (key, value) => {
+    get: (key) => (key === "context" ? [] : state),
+    set: (key, value, third) => {
       if (key === "view") state = value;
-      if (key === "home") home.push(value);
+      if (key === "home") home.push(third.images);
     },
   };
-  s0(scope, (next) => {
+  rR(scope, (next) => {
     next.prompt = "typing does not copy image data";
   });
   assert.equal(saved.length, 0);
-  s0(scope, (next) => {
+  rR(scope, (next) => {
     next.imageAttachments = [image, { ...image, id: "two" }];
   });
   assert.equal(saved.at(-1).images.length, 2);
-  rto(scope);
+  Gur(scope);
   assert.equal(saved.at(-1).images.length, 0);
   assert.equal(home.at(-1).length, 0);
   assert.equal(state.imageAttachments.length, 0);

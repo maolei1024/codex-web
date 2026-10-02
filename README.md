@@ -6,7 +6,7 @@ This is the maintained [maolei1024 fork](https://github.com/maolei1024/codex-web
 of [0xcaff/codex-web](https://github.com/0xcaff/codex-web). It includes token and
 cookie authentication, bounded uploads, browser downloads, mobile layout and
 reconnection improvements, and compressed, versioned assets. The Desktop bundle
-is pinned to `26.901.41123`; the host supplies the Codex CLI.
+is pinned to `26.930.21537`; the host supplies the Codex CLI.
 
 Use one source checkout. User projects belong in `~/ChatGPT`, and credentials
 belong in the service environment outside Git. `CODEX_WEB_DOCUMENTS_DIR` can
@@ -216,7 +216,7 @@ rather than opening an interactive prompt.
 
 ## Container and cluster deployment
 
-The container pins Node 22.22.0, Codex CLI 0.156.1 and the Desktop version above.
+The container pins Node 22.22.0, Codex CLI 0.160.0 and the Desktop version above.
 Its native amd64 and arm64 builds run `npm test` and a packaged runtime smoke
 check before publication. Woodpecker builds on `main` push/manual, publishes
 `docker.nexus.ixuni.win/codex/web:build-N`, and applies `k8s/codex-web.yaml`.

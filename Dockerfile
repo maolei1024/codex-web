@@ -11,10 +11,11 @@ RUN npm ci && npm test \
     && rm -rf scratch/ChatGPT.app
 
 FROM node:22.22.0-bookworm-slim AS runtime
+COPY --from=build /app/local-build.json /app/local-build.json
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git openssh-client ripgrep tini \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install --global @openai/codex@0.156.1 \
+    && npm install --global "@openai/codex@$(node -p 'require("/app/local-build.json").codexCliVersion')" \
     && npm cache clean --force
 WORKDIR /app
 COPY --from=build /app/package.json /app/local-build.json ./

@@ -218,11 +218,11 @@ test("service wrapper does not enumerate RPC proxies and retains other receivers
 
 test("built Desktop service initialization and artifact analytics use browser adapter", async () => {
   const initial = await readFile(
-    "scratch/asar/webview/assets/app-initial-236e1501144c.js",
+    "scratch/asar/webview/assets/app-shared-59042e7300f7.js",
     "utf8",
   );
   const header = await readFile(
-    "scratch/asar/webview/assets/artifact-preview-header-4664951e6ca3.js",
+    "scratch/asar/webview/assets/artifact-preview-header-a8f8d70ab2c5.js",
     "utf8",
   );
   const preload = await readFile(
@@ -231,7 +231,7 @@ test("built Desktop service initialization and artifact analytics use browser ad
   );
   assert.match(
     initial,
-    /iX\s*=\s*window\.__ELECTRON_SHIM__\??\.wrapBrowserServices/,
+    /i6\s*=\s*window\.__ELECTRON_SHIM__\??\.wrapBrowserServices/,
   );
   assert.match(header, /downloadStarted/);
   assert.match(

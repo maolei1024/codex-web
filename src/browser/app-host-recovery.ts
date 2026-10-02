@@ -11,6 +11,7 @@ type Subscription = {
   value?: any;
   active: boolean;
   attaching?: Promise<void>;
+  onBroken?: (error: unknown) => void;
 };
 type Pending = {
   deadline: number;
@@ -62,6 +63,7 @@ const NATIVE_READS = new Set([
   "thread/resume",
 ]);
 const SUBSCRIPTIONS = new Set([
+  "accessInputs.subscribe",
   "settings.subscribe",
   "terminal.subscribe",
   "inAppBrowserIncompleteNavigation.subscribe",
@@ -185,6 +187,9 @@ export class AppHostRecovery {
       this.now() - (event.durationMs ?? 0),
       event.type,
     );
+    // Durable cloud threads have their own authentication and connection.
+    // Their optional reads must not retire the local/SSH browser bridge.
+    if (event.hostId === "durable") return;
     // Native clients also report background reads and write preparation. Their
     // errors belong to the caller, not to a completed startup cycle. In
     // particular, an inactive thread read must not poison the next foreground
@@ -225,10 +230,15 @@ export class AppHostRecovery {
   async nativeRequest<T>(
     method: string,
     operation: (timeoutMs?: number) => Promise<T>,
+    hostId?: string,
   ): Promise<T> {
     // Once ready, a read preparing a user write fails back to that caller. It
     // must never keep a pending send alive until a later automatic recovery.
-    if (!NATIVE_READS.has(method) || (this.everReady && !this.cycle))
+    if (
+      hostId === "durable" ||
+      !NATIVE_READS.has(method) ||
+      (this.everReady && !this.cycle)
+    )
       return operation();
     return this.retry(method, async () => {
       const cycle = this.budget();
@@ -566,9 +576,14 @@ export class AppHostRecovery {
     if (!callable)
       return Promise.reject(new RecoveryError(method, "disconnected"));
     let raw: any;
+    const brokenCallbacks = new Set<(error: unknown) => void>();
     const task = this.attempt(
       method,
-      () => (raw = Reflect.apply(callable, receiver, args)),
+      () => {
+        raw = Reflect.apply(callable, receiver, args);
+        for (const callback of brokenCallbacks) raw?.onRpcBroken?.(callback);
+        return raw;
+      },
       true,
       READS.has(method) ||
         SUBSCRIPTIONS.has(method) ||
@@ -579,6 +594,19 @@ export class AppHostRecovery {
     Object.defineProperty(task, Symbol.dispose, {
       value: () => {
         raw?.[Symbol.dispose]?.();
+      },
+    });
+    Object.defineProperty(task, "onRpcBroken", {
+      value: (callback: (error: unknown) => void) => {
+        let notified = false;
+        const notify = (error: unknown) => {
+          if (notified) return;
+          notified = true;
+          callback(error);
+        };
+        brokenCallbacks.add(notify);
+        raw?.onRpcBroken?.(notify);
+        void task.catch(notify).catch(() => {});
       },
     });
     return task;
@@ -604,6 +632,10 @@ export class AppHostRecovery {
           return;
         }
         entry.value = value;
+        (value as any)?.onRpcBroken?.((error: unknown) => {
+          if (entry.active && generation === this.generation)
+            entry.onBroken?.(error);
+        });
       } catch (error) {
         if (entry.generation === generation) entry.generation = -1;
         throw error;
@@ -613,6 +645,14 @@ export class AppHostRecovery {
   }
   private subscribe(path: string[], args: unknown[]) {
     const entry: Subscription = { path, args, active: true, generation: -1 };
+    const brokenCallbacks = new Set<(error: unknown) => void>();
+    const onRpcBroken = (callback: (error: unknown) => void) => {
+      brokenCallbacks.add(callback);
+      void task.catch(callback).catch(() => {});
+    };
+    entry.onBroken = (error) => {
+      for (const callback of brokenCallbacks) callback(error);
+    };
     this.subscriptions.add(entry);
     const dispose = () => {
       entry.active = false;
@@ -627,7 +667,7 @@ export class AppHostRecovery {
       await this.connect();
       await this.attach(entry);
     }).then(
-      () => ({ unsubscribe: dispose, [Symbol.dispose]: dispose }),
+      () => ({ unsubscribe: dispose, [Symbol.dispose]: dispose, onRpcBroken }),
       (error) => {
         dispose();
         throw error;
@@ -635,6 +675,7 @@ export class AppHostRecovery {
     );
     void task.catch(() => {});
     Object.defineProperty(task, Symbol.dispose, { value: () => {} });
+    Object.defineProperty(task, "onRpcBroken", { value: onRpcBroken });
     return task;
   }
   private proxy(path: string[]): any {
@@ -682,6 +723,12 @@ export class AppHostRecovery {
         void task.catch(() => {});
         if (!(Symbol.dispose in task))
           Object.defineProperty(task, Symbol.dispose, { value: () => {} });
+        if (!("onRpcBroken" in task))
+          Object.defineProperty(task, "onRpcBroken", {
+            value: (callback: (error: unknown) => void) => {
+              void task.catch(callback).catch(() => {});
+            },
+          });
         return task;
       },
     });

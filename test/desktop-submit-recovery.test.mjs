@@ -4,11 +4,11 @@ import test from "node:test";
 import vm from "node:vm";
 
 const primary = await readFile(
-  "scratch/asar/webview/assets/app-primary-6b28e06666ff.js",
+  "scratch/asar/webview/assets/app-primary-c9f7ac16cee9.js",
   "utf8",
 );
 const initial = await readFile(
-  "scratch/asar/webview/assets/app-initial-236e1501144c.js",
+  "scratch/asar/webview/assets/app-initial-60d038a052d7.js",
   "utf8",
 );
 const sentinel = Symbol.for("react.memo_cache_sentinel");
@@ -22,64 +22,63 @@ function nativeFunction(name, end, source = primary) {
 }
 
 test("native early submit failure reports the error and releases its real submission lock", async () => {
-  const PD = {},
-    Vx = {},
-    FE = {},
-    jl = {};
-  const state = new Map([
-    [PD, false],
-    [Vx, null],
-    [FE, "local"],
-    [jl, []],
-  ]);
-  const scope = {
-    value: { kind: "local", clientThreadId: null },
-    get: (key) => state.get(key),
-    set: (key, value) => state.set(key, value),
-  };
-  const failures = [];
-  const draft = { text: "keep this draft", images: ["test-image"] };
+  const state = new Map(),
+    scope = {
+      value: { kind: "local", placement: "main", clientThreadId: null },
+      get: (key) => state.get(key),
+      set: (key, value) => state.set(key, value),
+      watch: () => () => {},
+    };
+  const failures = [],
+    draft = { text: "keep this draft", images: ["test-image"] };
   let cleared = 0,
     started = 0;
   const expected = Error("[codex-web:transport] Configuration read timed out.");
   const context = {
-    PD,
-    Vx,
-    FE,
-    jl,
-    US: {},
-    MT: () => scope,
-    lv: () => null,
-    gn: () => ({ modelSettings: { isLoading: false } }),
-    pH: () => ({
-      getText: () => draft.text,
-      getPersistedText: () => draft.text,
-      getMentionedBrowserFamilies: () => [],
-    }),
-    uD: (fn) => fn,
-    OXr: () => ({
+    wh: () => scope,
+    iT: {},
+    jw: {},
+    Aw: () => ({ getText: () => draft.text }),
+    SC: () => ({ modelSettings: { isLoading: false } }),
+    BS: () => null,
+    X: () => null,
+    gm: "account",
+    Em: "user",
+    HT: {},
+    uT: {},
+    Fy: {},
+    WX: {
+      use: () => null,
+      useRef: (value) => ({ current: value }),
+      useEffect() {},
+    },
+    tm: (fn) => fn,
+    Gy: "submitting",
+    vOe: "accepted",
+    $Y: {},
+    QR: {},
+    Dw: {},
+    pot: { default: (fn) => fn },
+    oX: () => false,
+    cot: () => ({
+      isComposerSubmitting: false,
       queueAttachmentSubmit: () => false,
       queueLocalConfigSubmit: () => false,
     }),
-    rYr: () => false,
-    Nqr: () => [],
-    Fqr: () => false,
-    performance: { timeOrigin: 0, now: () => 1 },
-    K1t: () => false,
-  };
-  const submitHook = vm.runInNewContext(
-    `${nativeFunction("mXr", /function hXr\(/)}; ${nativeFunction("MXr", /var NXr\s*=/)}; MXr`,
-    context,
-  );
-  const { submitComposer } = submitHook({
-    callbacks: {
-      clearStopTurnConfirmation() {},
-      clearComposerUi: () => cleared++,
-      getDefaultFollowUpSubmitAction: () => "steer",
-      prepareThreadGoalSubmit: async () => {
-        assert.equal(state.get(PD), true);
+    rbe: () => ({
+      submit: async () => {
+        assert.equal(state.get("submitting"), true);
         throw expected;
       },
+    }),
+  };
+  const hook = vm.runInNewContext(
+    `${nativeFunction("fot", /var pot[\s,]/)}; fot`,
+    context,
+  );
+  const { submitComposer } = hook({
+    callbacks: {
+      clearComposerUi: () => cleared++,
       handleSubmitError: (error) => failures.push(error),
     },
     submissionState: {
@@ -90,7 +89,7 @@ test("native early submit failure reports the error and releases its real submis
     submitTarget: { type: "local", submit: () => started++ },
   });
   await submitComposer();
-  assert.equal(state.get(PD), false);
+  assert.equal(state.get("submitting"), false);
   assert.deepEqual(failures, [expected]);
   assert.equal(cleared, 0);
   assert.equal(started, 0);
@@ -98,9 +97,10 @@ test("native early submit failure reports the error and releases its real submis
 });
 
 test("native deferred submit cancels on config failure and cannot revive when config recovers", async () => {
-  let slot = 0;
+  let slot = 0,
+    pending = false;
   const slots = [],
-    memo = cache(26),
+    memo = cache(31),
     effects = [];
   const hooks = {
     useRef(value) {
@@ -117,12 +117,25 @@ test("native deferred submit cancels on config failure and cannot revive when co
         },
       ];
     },
+    useLayoutEffect() {},
     useEffectEvent: (fn) => fn,
     useEffect: (fn) => effects.push(fn),
   };
   const hook = vm.runInNewContext(
-    `${nativeFunction("TXr", /var EXr[\s,]/)}; TXr`,
-    { EXr: { c: () => memo }, A9: hooks, uD: (fn) => fn },
+    `${nativeFunction("aot", /var oot[\s,]/)}; aot`,
+    {
+      oot: { c: () => memo },
+      UX: hooks,
+      tm: (fn) => fn,
+      iT: {},
+      jT: "pending",
+      wh: () => ({
+        set: (_key, value) => {
+          pending = value;
+        },
+      }),
+      X: () => pending,
+    },
   );
   let sent = 0,
     fail;
@@ -130,8 +143,8 @@ test("native deferred submit cancels on config failure and cannot revive when co
     fail = reject;
   });
   const props = {
-    isLocalConfigPending: true,
-    localConfigTargetKey: "local/project",
+    isConfigPending: true,
+    configTargetKey: "local/project",
     submitTargetKey: "thread",
     onSubmitQueued: () => loading,
     submitComposer: () => sent++,
@@ -149,7 +162,7 @@ test("native deferred submit cancels on config failure and cannot revive when co
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(render().hasPendingSubmit, false);
-  props.isLocalConfigPending = false;
+  props.isConfigPending = false;
   render();
   render();
   assert.equal(
@@ -164,23 +177,23 @@ test("native queued configuration errors remain rejected after displaying a toas
     toasts = [];
   let queued;
   const hook = vm.runInNewContext(
-    `${nativeFunction("OXr", /function kXr\(/)}; OXr`,
+    `${nativeFunction("cot", /function lot\(/)}; cot`,
     {
-      AXr: { c: cache },
-      Em: {},
-      eye: {},
-      Ex: {},
-      MT: () => ({
+      uot: { c: cache },
+      q: {},
+      Jwe: {},
+      Vm: {},
+      wh: () => ({
         get: () => ({ danger: (message) => toasts.push(message) }),
       }),
-      kx: () => false,
-      xXr() {},
-      kXr() {},
+      X: () => false,
+      tot() {},
+      lot() {},
       $f: (error) => error.message,
-      yXr: async () => {
+      $at: async () => {
         throw expected;
       },
-      TXr: (options) => {
+      aot: (options) => {
         queued = options.onSubmitQueued;
         return {};
       },
@@ -193,12 +206,12 @@ test("native queued configuration errors remain rejected after displaying a toas
 
 test("the native recovery listener ignores snapshots but accepts bridge recovery events", () => {
   const match =
-    /D\s*=\s*\(?e\)?\s*=>\s*\{\s*e\.isSnapshot[\s\S]{0,160}?\}/.exec(initial);
+    /T\s*=\s*\(?e\)?\s*=>\s*\{\s*e\.isSnapshot[\s\S]{0,160}?\}/.exec(initial);
   assert.ok(match, "pinned Desktop recovery listener must exist");
   const recovered = [];
   const listener = vm.runInNewContext(
-    `(${match[0].replace(/^D\s*=\s*/, "")})`,
-    { o: false, C: (host) => recovered.push(host) },
+    `(${match[0].replace(/^T\s*=\s*/, "")})`,
+    { o: false, S: (host) => recovered.push(host) },
   );
   listener({ hostId: "local", isSnapshot: true });
   assert.deepEqual(recovered, []);

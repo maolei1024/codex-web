@@ -14,16 +14,16 @@ const settle = async () => {
 
 async function nativeScheduler() {
   const source = await readFile(
-    "scratch/asar/.vite/build/src-VqXTPopo.js",
+    "scratch/asar/.vite/build/bootstrap-yYZ8rgHq.js",
     "utf8",
   );
-  const start = source.indexOf("SK=6,CK=5,");
-  const end = source.indexOf("var VK=", start);
+  const start = source.indexOf("var lj = 8,");
+  const end = source.indexOf("var kj =", start);
   assert.ok(
     start >= 0 && end > start,
     "pinned Desktop host scheduler must exist",
   );
-  const Scheduler = vm.runInNewContext(`var ${source.slice(start, end)}; RK`, {
+  const Scheduler = vm.runInNewContext(`${source.slice(start, end)}; Ej`, {
     Date,
     setTimeout,
     clearTimeout,

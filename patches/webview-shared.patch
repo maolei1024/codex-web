@@ -1,0 +1,205 @@
+--- a/webview/assets/app-shared-59042e7300f7.js
++++ b/webview/assets/app-shared-59042e7300f7.js
+@@ -14168,6 +14168,7 @@
+           if (n?.sendMessageFromView) {
+             let r = e;
+             (n.sendMessageFromView(r).catch((t) => {
++              if (window.__ELECTRON_SHIM__?.isTransportFailure?.(t)) return;
+               r.type !== `log-message` &&
+                 mf.warning(`Failed to send message from view`, {
+                   safe: { type: r.type },
+@@ -31793,7 +31794,7 @@
+   }
+ }
+ function Ade() {
+-  return !0;
++  return window.__ELECTRON_SHIM__.initialSidebarState;
+ }
+ function jde(e) {
+   return typeof e == `object` && !!e && `type` in e;
+@@ -127144,7 +127145,7 @@
+         }
+       }),
+       (rVt = class {
+-        encodingLevel = `structuredClonable`;
++        encodingLevel = `jsonCompatible`;
+         constructor(e) {
+           ((this.#e = e),
+             e.start(),
+@@ -172074,9 +172075,13 @@
+               mf.error(`Received app server error`, {
+                 safe: {},
+                 sensitive: { id: e, error: t },
+-              }));
++            }));
+         }
+         async sendRequest(e, t, n) {
++          return window.__ELECTRON_SHIM__.appHost.nativeRequest(e,
++            timeoutMs => this.sendRequestOnce(e, t, timeoutMs == null ? n : { ...n, priority: "critical", timeoutMs: Math.min(n?.timeoutMs > 0 ? n.timeoutMs : Infinity, timeoutMs) }), this.hostId);
++        }
++        async sendRequestOnce(e, t, n) {
+           if (this.dispatchMessage == null)
+             throw Error(
+               `AppServerRequestClient is missing a message dispatcher`,
+@@ -172534,7 +172539,7 @@
+             return;
+           }
+           let n = Date.now(),
+-            r = Error(`Timeout`);
++            r = Object.assign(Error(`Timeout`), { name: "CodexWebTransportError" });
+           (mf.warning(`mcp_request_timeout`, {
+             safe: {
+               requestId: e,
+@@ -172597,6 +172602,7 @@
+             }));
+         }
+         emitRequestLifecycleEvent(e) {
++          window.__ELECTRON_SHIM__?.appServerRequestLifecycle?.(e);
+           for (let t of this.requestLifecycleListeners)
+             try {
+               t(e);
+@@ -175125,19 +175131,23 @@
+       (e.useStatsigInternalClientFactoryAsync = void 0));
+     var t = eI(),
+       n = o();
++    const codexWebInitializations = new WeakMap();
+     function r(e, r) {
+-      let i = (0, n.useMemo)(() => (0, t._getInstance)(r.sdkKey) ?? e(r), []),
+-        [a, o] = (0, n.useState)(i.loadingStatus !== `Ready`);
+-      return (
+-        (0, n.useMemo)(() => {
+-          i.loadingStatus !== `Ready` &&
+-            i
+-              .initializeAsync()
+-              .catch(t.Log.error)
+-              .finally(() => o(!1));
+-        }, []),
+-        { client: i, isLoading: a }
+-      );
++      const client = (0, n.useMemo)(() => (0, t._getInstance)(r.sdkKey) ?? e(r), []);
++      if (client.loadingStatus !== `Ready`) {
++        let pending = codexWebInitializations.get(client);
++        if (pending == null) {
++          pending = client.initializeAsync().then(() => {
++            if (client.loadingStatus !== `Ready`)
++              throw Error(`Feature configuration initialization did not complete`);
++          });
++          codexWebInitializations.set(client, pending);
++        }
++        // A render can be suspended before its state setter is mounted. Let
++        // React track the SDK promise itself so completion always retries it.
++        (0, n.use)(pending);
++      }
++      return { client, isLoading: false };
+     }
+     e.useStatsigInternalClientFactoryAsync = r;
+   }),
+@@ -175148,7 +175158,14 @@
+       n = mfn();
+     function r(e, r, i = null) {
+       return (0, n.useStatsigInternalClientFactoryAsync)(
+-        (e) => new t.StatsigClient(e.sdkKey, e.initialUser, e.statsigOptions),
++        (e) => window.__ELECTRON_SHIM__.configureStatsigClient(
++          new t.StatsigClient(
++            e.sdkKey,
++            e.initialUser,
++            window.__ELECTRON_SHIM__.configureStatsigOptions(e.statsigOptions),
++          ),
++          e.sdkKey,
++        ),
+         { sdkKey: e, initialUser: r, statsigOptions: i },
+       );
+     }
+@@ -177570,6 +177587,10 @@
+           };
+         }
+         async sendRequest(e, t, n) {
++          return window.__ELECTRON_SHIM__.appHost.fetchRequest(t, n?.signal,
++            signal => this.sendRequestOnce(e, t, { ...n, signal }));
++        }
++        async sendRequestOnce(e, t, n) {
+           if (
+             !t.startsWith(`vscode://codex/`) &&
+             t !== `/codex/dictation-stream-connect-info`
+@@ -185636,6 +185657,7 @@
+       UW(),
+       (rK = aA(Q, () => ({
+         queryKey: zW(`get-settings`),
++        retry: false,
+         queryFn: () =>
+           i6?.settings?.readAll() ??
+           HW(`get-settings`, { responsePriority: eU() ? `critical` : void 0 }),
+@@ -185650,7 +185672,9 @@
+       })),
+       (aK = X(Q, ({ get: e }) => {
+         let t = e(rK);
+-        return t.isLoading || t.isPlaceholderData;
++        return (
++          t.isLoading || t.isPlaceholderData || (t.isError && t.data == null)
++        );
+       })),
+       (gwn = X(Q, ({ get: e }) => e(rK).isError)),
+       (_wn = nA(
+@@ -186131,15 +186155,11 @@
+       try {
+         return await EK(e, t, n, r, !0);
+       } catch (e) {
+-        return (
+-          mf.error(`Failed to load layered config`, {
+-            safe: {},
+-            sensitive: { error: e },
+-          }),
+-          t.getQueryData([...MK, n, r]) ?? TTn
+-        );
++        mf.error(`Failed to load layered config`, { safe: {}, sensitive: { error: e } });
++        throw e;
+       }
+     },
++    retry: false,
+     staleTime: yU.FIVE_MINUTES,
+   });
+ }
+@@ -186152,6 +186172,7 @@
+         { includeLayers: i, cwd: r },
+         { ...Opn() },
+       ),
++    retry: false,
+     staleTime: 0,
+   });
+ }
+@@ -253607,7 +253628,7 @@
+   }))();
+ }
+ function tVr(e) {
+-  return `${iVr}${rVr(e)}`;
++  return rVr(e);
+ }
+ function nVr(e) {
+   return rVr(e);
+@@ -270972,15 +270993,18 @@
+   }))();
+ }
+ async function dei() {
+-  ((r6 = lei(sei)),
+-    (i6 = await r6.services),
+-    i6.threadReadState != null &&
+-      (await sei.threadReadState.initialize(i6.threadReadState)),
+-    i6.statsig != null && (await Fzt(i6.statsig)),
+-    i6.clientCoordination != null && S6r(i6.clientCoordination),
+-    i6.terminal != null && rBt(i6.terminal),
+-    i6.devboxService);
++  i6 = await window.__ELECTRON_SHIM__.configureAppHost(() => {
++    const host = lei(sei);
++    r6 = host;
++    return { services: host.services, close: () => host[Symbol.dispose](), onBroken: callback => host.onRpcBroken(callback) };
++  });
++  i6 = window.__ELECTRON_SHIM__.wrapBrowserServices(i6);
++  if (i6.threadReadState != null) await sei.threadReadState.initialize(i6.threadReadState);
++  if (i6.statsig != null) await Fzt(i6.statsig);
++  if (i6.clientCoordination != null) S6r(i6.clientCoordination);
++  if (i6.terminal != null) rBt(i6.terminal);
+ }
++
+ var r6, i6;
+ function a6() {
+   return (a6 = t(() => {

@@ -44,6 +44,7 @@ function setup(
     get services() {
       return {
         settings,
+        accessInputs: settings,
         startup: new (class extends rpc.Target {
           whenReady() {}
         })(),
@@ -88,6 +89,25 @@ test("native MessagePort close sentinel rejects an outstanding services handshak
   host[Symbol.dispose]();
   port1.close();
   port2.close();
+});
+
+test("Desktop account subscriptions retain RPC broken notifications before and after resolution", async (t) => {
+  const env = setup(t);
+  const services = await env.coordinator.start();
+  const updates = [],
+    failures = [];
+  const request = services.accessInputs.subscribe("account", (value) =>
+    updates.push(value),
+  );
+  request.onRpcBroken((error) => failures.push(error));
+  const subscription = await request;
+  subscription.onRpcBroken((error) => failures.push(error));
+  assert.deepEqual(updates, ["initial"]);
+  assert.equal(env.callbacks.size, 1);
+  subscription[Symbol.dispose]();
+  await settle();
+  assert.equal(env.callbacks.size, 0);
+  assert.deepEqual(failures, []);
 });
 
 test("settings that never reply stop after two retries and clean the real native RPC", async (t) => {
@@ -349,6 +369,44 @@ test("startup native reads retry the extracted request client, while ready write
   });
   await assert.rejects(failure, /stop pending send/);
   assert.equal(count, attempts + 1);
+});
+
+test("optional durable authentication errors do not exhaust local startup recovery", async (t) => {
+  const env = setup(t);
+  const services = await env.coordinator.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  const { Client } = await import("./desktop-request-harness.mjs").then(
+    ({ nativeRequestClient }) =>
+      nativeRequestClient(
+        () => {},
+        (event) => env.coordinator.observeNative(event),
+        env.coordinator,
+      ),
+  );
+  let requests = 0;
+  const cloud = new Client("durable", (_type, { request }) => {
+    requests++;
+    queueMicrotask(() =>
+      cloud.onError(request.id, {
+        code: -32000,
+        message: "Sign in to ChatGPT",
+      }),
+    );
+  });
+  await assert.rejects(cloud.sendRequest("thread/list", {}, { trace: null }), {
+    message: "Sign in to ChatGPT",
+  });
+  assert.equal(requests, 1);
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    env.coordinator.observeNative({
+      method,
+      hostId: "local",
+      type: "completed",
+    });
+  await settle();
+  assert.equal(env.coordinator.diagnostics().exhausted, false);
+  assert.equal(env.coordinator.diagnostics().stages.models.state, "completed");
 });
 
 test("disconnect before dispatch cannot turn a rejected write into a late mutation", async (t) => {

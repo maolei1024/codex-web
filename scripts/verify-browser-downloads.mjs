@@ -23,14 +23,14 @@ const root = path.resolve(
     path.join(path.dirname(fileURLToPath(import.meta.url)), ".."),
 );
 const baselineUIOnly = process.argv.includes("--baseline-ui-only");
-if (!baselineUIOnly && await realpath(root) === await realpath("/home/ml/codex-web-current")) {
+if (!baselineUIOnly && await realpath(root) === await realpath("/srv/docker-data/codex-web/runtime")) {
   throw new Error("Refusing to use the active release as a writable shadow fixture");
 }
 const build = JSON.parse(
   await readFile(path.join(root, "local-build.json"), "utf8"),
 ).id;
 const runtime = await mkdtemp(
-  "/srv/docker-data/codex-maintenance/tmp/download-browser-",
+  "/tmp/codex-web-download-browser-",
 );
 await chmod(runtime, 0o700);
 const codexTestHome = path.join(runtime, "codex-home");
@@ -60,8 +60,8 @@ const port = baselineUIOnly ? 28217 : 28216;
 const origin = new URL(
   `http://download-${path.basename(runtime)}.localhost:${port}`,
 ).origin;
-const sourceDocument =
-  "/home/ml/codex-web-deploy/archforce-东方/东方证券_ATP_T5切T3及ACP升级与回切手册_20260910_150219.docx";
+const sourceDocument = path.join(runtime, "下载验证-文件.txt");
+await writeFile(sourceDocument, "Codex Web 中文下载验证\n", { mode: 0o600 });
 const sourceImage = path.join(
   root,
   "scratch/asar/webview/assets/pwa-icon-512.png",
@@ -134,7 +134,10 @@ try {
         ...process.env,
         CODEX_HOME: codexTestHome,
         CODEX_WEB_TOKEN: token,
-        CODEX_CLI_PATH: "/home/ml/.local/node-v22.22.0/bin/codex",
+        CODEX_CLI_PATH: process.env.CODEX_CLI_PATH || "codex",
+        CODEX_WEB_DATA_DIR: path.join(runtime, "app"),
+        CODEX_ELECTRON_USER_DATA_PATH: path.join(runtime, "app/userData"),
+        CODEX_WEB_DOCUMENTS_DIR: path.join(runtime, "documents"),
         CODEX_WEB_UPLOAD_ROOT: path.join(runtime, "uploads"),
       },
     },
@@ -304,13 +307,13 @@ try {
     frames.add(frameId);
     pages.push({ targetId, sessionId, frameId });
   }
-  const asset = `${origin}/assets/__build/${build}/app-initial-236e1501144c.js`;
+  const asset = `${origin}/assets/__build/${build}/app-shared-59042e7300f7.js`;
   for (const page of pages) {
     await until(
       () =>
         evaluate(
           page.sessionId,
-          `(async()=>{if(!${baselineUIOnly}&&!window.__ELECTRON_SHIM__?.wrapBrowserServices)return false;const mod=await import(${JSON.stringify(asset)});return !!mod.wR?.workspaceFiles?.saveCopy;})()`,
+          `(async()=>{if(!${baselineUIOnly}&&!window.__ELECTRON_SHIM__?.wrapBrowserServices)return false;const mod=await import(${JSON.stringify(asset)});return !!mod.$k?.workspaceFiles?.saveCopy;})()`,
         ),
       "actual app-host service initialization",
       90000,
@@ -329,7 +332,7 @@ try {
     ? []
     : [
         [
-          "docx",
+          "text",
           { hostId: "local", path: sourceDocument },
           await readFile(sourceDocument),
         ],
@@ -349,7 +352,7 @@ try {
     const requestStart = network.length;
     const result = await evaluate(
       pages[0].sessionId,
-      `(async()=>{const mod=await import(${JSON.stringify(asset)});return mod.wR.workspaceFiles.saveCopy(${JSON.stringify(input)});})()`,
+      `(async()=>{const mod=await import(${JSON.stringify(asset)});return mod.$k.workspaceFiles.saveCopy(${JSON.stringify(input)});})()`,
       true,
     );
     assert.deepEqual(result, { path: null, downloadStarted: true });
@@ -401,7 +404,7 @@ try {
       ]) {
     const result = await evaluate(
       pages[0].sessionId,
-      `(async()=>{const mod=await import(${JSON.stringify(asset)});try{await mod.wR.workspaceFiles.saveCopy(${JSON.stringify(input)});return {rejected:false}}catch(e){return {rejected:true,message:window.__ELECTRON_SHIM__.downloadErrorMessage(e)}}})()`,
+      `(async()=>{const mod=await import(${JSON.stringify(asset)});try{await mod.$k.workspaceFiles.saveCopy(${JSON.stringify(input)});return {rejected:false}}catch(e){return {rejected:true,message:window.__ELECTRON_SHIM__.downloadErrorMessage(e)}}})()`,
     );
     assert.equal(result.rejected, true);
     assert.ok(result.message);

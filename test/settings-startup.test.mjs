@@ -4,22 +4,23 @@ import { readFile } from "node:fs/promises";
 import { importTypescriptModule } from "./import-typescript-module.mjs";
 const recovery = await importTypescriptModule("src/server/startup-recovery.ts");
 const source = await readFile(
-  "scratch/asar/.vite/build/main-C5K7o1Hr.js",
+  "scratch/asar/.vite/build/main-C3nRcJ3D.js",
   "utf8",
 );
-const start = source.indexOf("var FL = class extends hL");
-const end = source.indexOf("function LL()", start);
+const start = source.indexOf("var aL = class extends II");
+const end = source.indexOf("function sL()", start);
 assert.ok(start > 0 && end > start);
-const n = {
-  Xi: { conversationDetailMode: { key: "detail" } },
-  ea: { openLinkInTargetPreference: { key: "open" } },
-  Ki: (_, v) => v,
+const r = {
+  B: { conversationDetailMode: { key: "detail" } },
+  G: { openLinkInTargetPreference: { key: "open" } },
+  I: (_, v) => v,
 };
 const Settings = new Function(
-  "n",
-  "hL",
-  `${source.slice(start, end)}; return FL;`,
-)(n, class {});
+  "r",
+  "II",
+  "nL",
+  `${source.slice(start, end)}; return aL;`,
+)(r, class {}, class {});
 const tick = async () => {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 };

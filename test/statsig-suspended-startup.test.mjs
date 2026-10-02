@@ -10,23 +10,23 @@ import { renderToPipeableStream } from "react-dom/server";
 // a state setter while suspended, reproducing the browser's interrupted mount.
 async function hook(client) {
   const bundle = await readFile(
-    "scratch/asar/webview/assets/app-initial-236e1501144c.js",
+    "scratch/asar/webview/assets/app-shared-59042e7300f7.js",
     "utf8",
   );
-  const start = bundle.search(/_Tn\s*=\s*i\(/);
-  const end = bundle.indexOf("vTn", start);
+  const start = bundle.search(/mfn\s*=\s*i\(/);
+  const end = bundle.indexOf("hfn", start);
   assert.ok(start >= 0 && end > start);
   const source = bundle.slice(start, end).trim().replace(/,$/, ";");
   return vm.runInNewContext(
-    `let ${source}; _Tn.useStatsigInternalClientFactoryAsync`,
+    `let ${source}; mfn.useStatsigInternalClientFactoryAsync`,
     {
       i: (factory) => {
         const exports = {};
         factory(exports);
         return exports;
       },
-      c: () => React,
-      cx: () => ({ _getInstance: () => client, Log: { error() {} } }),
+      o: () => React,
+      eI: () => ({ _getInstance: () => client, Log: { error() {} } }),
     },
   );
 }

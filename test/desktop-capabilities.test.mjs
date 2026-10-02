@@ -50,21 +50,14 @@ test("SSH and activity UI work without Statsig values; unknown permissions are u
   );
 });
 
-test("model additions preserve upstream models and do not invent an empty catalog", () => {
-  assert.equal(
-    overrides.getDynamicConfigOverride({ name: "107580212", value: {} }),
-    null,
-  );
-  const result = overrides.getDynamicConfigOverride({
-    name: "107580212",
-    value: { available_models: ["upstream-model", "gpt-6-astra"], other: 42 },
-  });
-  assert.equal(result.value.other, 42);
-  assert.equal(result.value.available_models[0], "upstream-model");
-  assert.equal(
-    result.value.available_models.filter((x) => x === "gpt-6-astra").length,
-    1,
-  );
+test("native model availability is authoritative, including empty or restricted catalogs", () => {
+  for (const available_models of [[], ["gpt-6-astra"], ["gpt-6.1-sol"]]) {
+    const evaluation = Object.freeze({
+      name: "107580212",
+      value: Object.freeze({ available_models: Object.freeze(available_models) }),
+    });
+    assert.equal(overrides.getDynamicConfigOverride(evaluation), null);
+  }
 });
 
 test("browser bridge selects Desktop's DOM menus while retaining SSH and IPC methods", () => {

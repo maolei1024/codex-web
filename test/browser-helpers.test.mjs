@@ -2,15 +2,52 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { importTypescriptModule } from "./import-typescript-module.mjs";
 
+test("Desktop UUIDs work on HTTP with secure entropy and preserve the native implementation", async () => {
+  const { installRandomUUID } = await importTypescriptModule(
+    "src/browser/crypto-compat.ts",
+  );
+  const httpCrypto = {
+    getRandomValues: (array) => crypto.getRandomValues(array),
+  };
+  installRandomUUID(httpCrypto);
+  const values = new Set(
+    Array.from({ length: 100 }, () => httpCrypto.randomUUID()),
+  );
+  assert.equal(values.size, 100);
+  for (const value of values)
+    assert.match(
+      value,
+      /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/,
+    );
+  const native = crypto.randomUUID;
+  installRandomUUID(crypto);
+  assert.equal(crypto.randomUUID, native);
+});
+
 test("reconnect delay uses capped exponential backoff with jitter", async () => {
   const { reconnectDelayMs } = await importTypescriptModule(
     "src/browser/reconnect.ts",
   );
-  assert.equal(reconnectDelayMs(0, () => 0.5), 500);
-  assert.equal(reconnectDelayMs(4, () => 0.5), 8_000);
-  assert.equal(reconnectDelayMs(100, () => 0.5), 15_000);
-  assert.equal(reconnectDelayMs(0, () => 0), 375);
-  assert.equal(reconnectDelayMs(0, () => 1), 625);
+  assert.equal(
+    reconnectDelayMs(0, () => 0.5),
+    500,
+  );
+  assert.equal(
+    reconnectDelayMs(4, () => 0.5),
+    8_000,
+  );
+  assert.equal(
+    reconnectDelayMs(100, () => 0.5),
+    15_000,
+  );
+  assert.equal(
+    reconnectDelayMs(0, () => 0),
+    375,
+  );
+  assert.equal(
+    reconnectDelayMs(0, () => 1),
+    625,
+  );
 });
 
 test("mobile viewport helper distinguishes keyboard, URL bar and pinch zoom", async () => {
@@ -84,6 +121,9 @@ test("only composer-related targets trigger paste/drop upload", async () => {
     shouldHandleFileEventTarget(new FakeElement([".ProseMirror"])),
     true,
   );
-  assert.equal(shouldHandleFileEventTarget(new FakeElement(["textarea"])), false);
+  assert.equal(
+    shouldHandleFileEventTarget(new FakeElement(["textarea"])),
+    false,
+  );
   assert.equal(shouldHandleFileEventTarget(new EventTarget()), false);
 });

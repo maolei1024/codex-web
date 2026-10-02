@@ -1,56 +1,43 @@
---- a/webview/assets/app-initial-236e1501144c.js
-+++ b/webview/assets/app-initial-236e1501144c.js
-@@ -346222,6 +346222,7 @@
- async function DCa() {
-   ((OCa = TCa(CCa)),
-     (iX = await OCa.services),
-+    (iX = window.__ELECTRON_SHIM__?.wrapBrowserServices?.(iX) ?? iX),
-     iX.statsig != null && (await aQt(iX.statsig)),
-     iX.clientCoordination != null && g_r(iX.clientCoordination),
-     iX.terminal != null && yQt(iX.terminal),
---- a/webview/assets/artifact-preview-header-4664951e6ca3.js
-+++ b/webview/assets/artifact-preview-header-4664951e6ca3.js
-@@ -299,13 +299,13 @@
-             : () => {
-                 oe.workspaceFiles
-                   ?.saveCopy?.({ hostId: u, path: m })
--                  .catch(() => {
-+                  .catch((error) => {
-                     x.get(ee).danger(
--                      S.formatMessage({
-+                      window.__ELECTRON_SHIM__?.downloadErrorMessage?.(error) ?? S.formatMessage({
-                         id: `artifactTab.preview.downloadFailure`,
-                         defaultMessage: `Could not download artifact`,
-                         description: `Error shown when an artifact download fails`,
-                       }),
-                     );
-                   });
-               })),
-@@ -638,9 +638,9 @@
-         }),
-           await (async () => {
-             try {
--              let e = (
--                await oe.workspaceFiles?.saveCopy?.({ hostId: r, path: i })
--              )?.path;
-+              const downloadResult = await oe.workspaceFiles?.saveCopy?.({ hostId: r, path: i });
-+              if (downloadResult?.downloadStarted) return;
-+              let e = downloadResult?.path;
-               g(o, a, {
-                 hostKind: c.kind,
-                 operationId: s,
-@@ -650,12 +650,12 @@
-                     : P.CODEX_ARTIFACT_DOWNLOAD_OUTCOME_SUCCESS,
-               });
--            } catch {
-+            } catch (error) {
-               (g(o, a, {
-                 hostKind: c.kind,
-                 operationId: s,
-                 outcome: P.CODEX_ARTIFACT_DOWNLOAD_OUTCOME_ERROR,
-               }),
--                o.get(ee).danger(_));
-+                o.get(ee).danger(window.__ELECTRON_SHIM__?.downloadErrorMessage?.(error) ?? _));
-             }
-           })().finally(() => {
-             u(!1);
+--- a/webview/assets/artifact-preview-header-a8f8d70ab2c5.js
++++ b/webview/assets/artifact-preview-header-a8f8d70ab2c5.js
+@@ -439,9 +439,9 @@
+                 });
+                 return;
+               }
+-              n.workspaceFiles?.saveCopy?.({ hostId: S, path: O }).catch(() => {
++              n.workspaceFiles?.saveCopy?.({ hostId: S, path: O }).catch((error) => {
+                 F.get(A).danger(
+-                  L.formatMessage({
++                  window.__ELECTRON_SHIM__.downloadErrorMessage(error) ?? L.formatMessage({
+                     id: `artifactTab.preview.downloadFailure`,
+                     defaultMessage: `Could not download artifact`,
+                     description: `Error shown when an artifact download fails`,
+@@ -1165,7 +1165,9 @@
+       });
+       return;
+     }
+-    let e = (await n.workspaceFiles?.saveCopy?.({ hostId: r, path: o }))?.path;
++    const downloadResult = await n.workspaceFiles?.saveCopy?.({ hostId: r, path: o });
++    if (downloadResult?.downloadStarted) return;
++    let e = downloadResult?.path;
+     N(s, u, {
+       hostKind: i,
+       operationId: d,
+@@ -1174,7 +1176,7 @@
+           ? y.CODEX_ARTIFACT_DOWNLOAD_OUTCOME_CANCEL
+           : y.CODEX_ARTIFACT_DOWNLOAD_OUTCOME_SUCCESS,
+     });
+-  } catch {
++  } catch (error) {
+     (N(s, u, {
+       hostKind: i,
+       operationId: d,
+@@ -1182,7 +1184,7 @@
+     }),
+       s
+         .get(A)
+-        .danger(t, {
++        .danger(window.__ELECTRON_SHIM__.downloadErrorMessage(error) ?? t, {
+           errorAnalytics: {
+             toastId: `artifactPreviewHeader.saveArtifactCopyWithAnalytics`,
+           },

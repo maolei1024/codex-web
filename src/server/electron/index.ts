@@ -705,6 +705,10 @@ class BrowserWindow {
     return { ...this.bounds };
   }
 
+  getNormalBounds(): { height: number; width: number; x: number; y: number } {
+    return this.getBounds();
+  }
+
   setBounds(nextBounds: {
     height?: number;
     width?: number;
@@ -930,7 +934,8 @@ const nativeImage = {
   createFromPath(imagePath: string): { isEmpty: () => boolean } {
     log("nativeImage.createFromPath", [imagePath]);
     return {
-      isEmpty: () => !imagePath,
+      // Native shell images cannot be decoded in Node; web assets supply icons.
+      isEmpty: () => true,
     };
   },
 };
@@ -973,6 +978,7 @@ const powerSaveBlocker = {
   },
 };
 const screen = {
+  isCursorScreenPointSupported: () => false,
   ...createEmitterStub("screen"),
   getAllDisplays(): Array<{
     id: number;
@@ -1034,6 +1040,7 @@ function createSessionStub(label: string): {
   };
   getUserAgent: () => string;
   getDownloadHistory: () => Promise<unknown[]>;
+  extensions: { getExtensionCounts: () => Promise<null> };
   loadExtension: (extensionPath: string) => Promise<{
     id: string;
     name: string;
@@ -1047,7 +1054,9 @@ function createSessionStub(label: string): {
   removeListener: (event: string, listener: StubListener) => unknown;
   setPermissionCheckHandler: (...args: unknown[]) => void;
   setPermissionRequestHandler: (...args: unknown[]) => void;
+  setPermissionPromptHandler: (...args: unknown[]) => void;
   setPreferredLanguages: (languages: string[]) => void;
+  setWebsiteReportingEnabled: (enabled: boolean) => void;
   webRequest: {
     onBeforeRequest: (...args: unknown[]) => void;
     onBeforeSendHeaders: (...args: unknown[]) => void;
@@ -1071,6 +1080,7 @@ function createSessionStub(label: string): {
     async getDownloadHistory(): Promise<unknown[]> {
       return [];
     },
+    extensions: { getExtensionCounts: async () => null },
     async loadExtension(extensionPath: string): Promise<{
       id: string;
       name: string;
@@ -1100,8 +1110,15 @@ function createSessionStub(label: string): {
     setPermissionRequestHandler(...args: unknown[]): void {
       log(`${label}.setPermissionRequestHandler`, args);
     },
+    setPermissionPromptHandler(...args: unknown[]): void {
+      log(`${label}.setPermissionPromptHandler`, args);
+    },
     setPreferredLanguages(languages: string[]): void {
       log(`${label}.setPreferredLanguages`, [languages]);
+    },
+    setWebsiteReportingEnabled(enabled: boolean): void {
+      // Website reporting belongs to Chromium; the Node host has no renderer session.
+      log(`${label}.setWebsiteReportingEnabled`, [enabled]);
     },
     webRequest: {
       onBeforeRequest(...args: unknown[]): void {

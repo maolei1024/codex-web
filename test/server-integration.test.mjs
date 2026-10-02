@@ -15,6 +15,8 @@ const {
 const TOKEN = "integration-secret";
 
 const LOCAL_BUILD = JSON.parse(await readFile("local-build.json", "utf8")).id;
+const ENTRY_ASSET = (await readFile("scratch/asar/webview/index.html", "utf8"))
+  .match(/src="([^\"]*\/index-[^\"]+\.js)"/)[1];
 
 function options(overrides = {}) {
   return {
@@ -432,7 +434,7 @@ test("versioned preload is immutable; unversioned preload revalidates and all as
     }
     const immutable = await requestRaw(
       port,
-      `/assets/__build/${LOCAL_BUILD}/index-ff3baa300544.js`,
+      ENTRY_ASSET,
       { cookie },
     );
     assert.equal(immutable.status, 200);

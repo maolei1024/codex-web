@@ -32,10 +32,13 @@ import {
   type StatsigClientLike,
 } from "./statsig-cache";
 import { configureStatsigOptions } from "./statsig-network";
+import { installRandomUUID } from "./crypto-compat";
 import {
   openSelectWorkspaceRootDialog,
   type WorkspaceDirectoryEntries,
 } from "./workspace-root-dialog";
+
+installRandomUUID(window.crypto);
 
 type IpcListener = (event: unknown, ...args: unknown[]) => void;
 

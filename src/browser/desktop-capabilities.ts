@@ -31,28 +31,11 @@ export const desktopCapabilityOverrides = {
     return null;
   },
   getDynamicConfigOverride(
-    evaluation: DynamicConfigEvaluation,
+    _evaluation: DynamicConfigEvaluation,
   ): DynamicConfigEvaluation | null {
-    const value =
-      evaluation.value && typeof evaluation.value === "object"
-        ? (evaluation.value as Record<string, unknown>)
-        : {};
-    if (evaluation.name !== "107580212") return null;
-    const existing = Array.isArray(value.available_models)
-      ? (value.available_models as string[])
-      : [];
-    if (existing.length === 0) return null;
-    const additions = [
-      "gpt-6-astra",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-    ].filter((model) => !existing.includes(model));
-    if (additions.length === 0) return null;
-    return {
-      ...evaluation,
-      value: { ...value, available_models: [...existing, ...additions] },
-    };
+    // Model availability and capabilities belong to the native catalog and
+    // upstream account policy. Updating the CLI supplies new model metadata.
+    return null;
   },
   getLayerOverride(evaluation: LayerEvaluation): LayerEvaluation | null {
     if (evaluation.name !== "72216192") return null;

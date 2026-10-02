@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import test from "node:test";
@@ -17,6 +18,7 @@ const modules = Object.fromEntries(
       "shared-object-subscriptions",
       "reconnect",
       "app-host-recovery",
+      "crypto-compat",
     ].map(async (name) => [
       `./${name}`,
       await importTypescriptModule(`src/browser/${name}.ts`),
@@ -77,6 +79,7 @@ function setup(t) {
     }
   }
   const window = {
+    crypto: webcrypto,
     location: {
       protocol: "https:",
       host: "example.test",

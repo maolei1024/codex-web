@@ -1,0 +1,10 @@
+--- a/.vite/build/worker.js
++++ b/.vite/build/worker.js
+@@ -120070,6 +120070,7 @@
+   let r = NN(e.appVersion),
+     i = e.buildFlavor !== `prod`;
+   (Db({
++    enabled: false,
+     dsn: e.dsn,
+     transport: (e) => {
+       let t = pu(e.bufferSize ?? 64);
