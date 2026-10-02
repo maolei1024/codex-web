@@ -35,7 +35,7 @@
          }
          async sendRequest(e, t, n) {
 +          return window.__ELECTRON_SHIM__.appHost.nativeRequest(e,
-+            timeoutMs => this.sendRequestOnce(e, t, timeoutMs == null ? n : { ...n, priority: "critical", timeoutMs: Math.min(n?.timeoutMs > 0 ? n.timeoutMs : Infinity, timeoutMs) }), this.hostId);
++            timeoutMs => this.sendRequestOnce(e, t, timeoutMs == null ? n : { ...n, priority: "critical", timeoutMs: Math.min(n?.timeoutMs > 0 ? n.timeoutMs : Infinity, timeoutMs) }), this.hostId, t);
 +        }
 +        async sendRequestOnce(e, t, n) {
            if (this.dispatchMessage == null)
@@ -115,7 +115,7 @@
          }
          async sendRequest(e, t, n) {
 +          return window.__ELECTRON_SHIM__.appHost.fetchRequest(t, n?.signal,
-+            signal => this.sendRequestOnce(e, t, { ...n, signal }));
++            signal => this.sendRequestOnce(e, t, { ...n, signal }), n?.body);
 +        }
 +        async sendRequestOnce(e, t, n) {
            if (

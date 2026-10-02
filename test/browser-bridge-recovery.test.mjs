@@ -99,6 +99,7 @@ function setup(t) {
     setTimeout,
     clearTimeout,
     WebSocket: Socket,
+    URLSearchParams,
     document: {
       visibilityState: "visible",
       addEventListener: (type, fn) => documentEvents.set(type, fn),

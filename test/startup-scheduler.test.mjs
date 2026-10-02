@@ -56,7 +56,14 @@ test("actual native startup reads use reserved host capacity when all ordinary s
     reject() {},
   });
   assert.equal(ordinaryRan, false);
-  const coordinator = new AppHostRecovery();
+  const coordinator = new AppHostRecovery(
+    Date.now,
+    () => true,
+    () => ({
+      hostId: "local",
+      threadId: "foreground",
+    }),
+  );
   const priorities = [];
   const { client } = await nativeRequestClient(
     (type, data) => {
@@ -89,7 +96,11 @@ test("actual native startup reads use reserved host capacity when all ordinary s
   ];
   const results = await Promise.all(
     reads.map((method) =>
-      client.sendRequest(method, {}, { priority: "background" }),
+      client.sendRequest(
+        method,
+        { threadId: "foreground" },
+        { priority: "background" },
+      ),
     ),
   );
   assert.ok(results.every((result) => result.ok));

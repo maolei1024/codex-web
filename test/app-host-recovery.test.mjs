@@ -13,6 +13,7 @@ async function settle() {
 function setup(
   t,
   read = async () => ({ values: { theme: "system" }, configuredValues: {} }),
+  { requiresHistory, activeScope } = {},
 ) {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 });
   const channels = [],
@@ -51,7 +52,11 @@ function setup(
       };
     }
   }
-  const coordinator = new AppHostRecovery();
+  const coordinator = new AppHostRecovery(
+    Date.now,
+    requiresHistory,
+    activeScope,
+  );
   coordinator.configure(() => {
     connections++;
     const { port1, port2 } = new MessageChannel();
@@ -419,4 +424,168 @@ test("disconnect before dispatch cannot turn a rejected write into a late mutati
   await settle();
   assert.equal(env.writes, 0);
   assert.equal(services.nonexistentService, undefined);
+});
+
+test("background SSH and sidebar history failures cannot exhaust home startup or reconnection", async (t) => {
+  const env = setup(t);
+  const services = await env.coordinator.start();
+  const { Client } = await import("./desktop-request-harness.mjs").then(
+    ({ nativeRequestClient }) =>
+      nativeRequestClient(
+        () => {},
+        (event) => env.coordinator.observeNative(event),
+        env.coordinator,
+      ),
+  );
+  const clients = ["local", "remote-ssh-offline"].map((host) => {
+    const client = new Client(host, (_type, { request }) => {
+      queueMicrotask(() =>
+        client.onError(request.id, {
+          code: -32000,
+          message: "Background history unavailable",
+        }),
+      );
+    });
+    return client;
+  });
+  for (const reconnect of [false, true]) {
+    if (reconnect) {
+      env.coordinator.disconnect();
+      await env.coordinator.recover();
+    }
+    for (const client of clients)
+      await assert.rejects(
+        client.sendRequest(
+          "thread/read",
+          { threadId: "old-sidebar-thread" },
+          { trace: null },
+        ),
+        { message: "Background history unavailable" },
+      );
+    for (const hostId of ["remote-ssh-offline", "durable"])
+      await assert.rejects(
+        env.coordinator.fetchRequest(
+          "vscode://codex/codex-home",
+          undefined,
+          async () => {
+            throw new Error("Background home unavailable");
+          },
+          JSON.stringify({ hostId }),
+        ),
+        /Background home unavailable/,
+      );
+    await assert.rejects(
+      clients[1].sendRequest("config/read", {}, { trace: null }),
+      { message: "Background history unavailable" },
+    );
+    await services.settings.readAll();
+    await services.startup.whenReady();
+    for (const method of [
+      "config/read",
+      "configRequirements/read",
+      "model/list",
+    ])
+      env.coordinator.observeNative({
+        method,
+        hostId: "local",
+        type: "completed",
+      });
+    await settle();
+    t.mock.timers.tick(61_000);
+    env.coordinator.checkDeadlines();
+    assert.equal(env.coordinator.failed, false);
+    assert.deepEqual(env.coordinator.diagnostics().requiredFailures, []);
+    assert.equal(env.coordinator.diagnostics().stages.history, undefined);
+  }
+});
+
+test("selected host fetch failures still block startup", async (t) => {
+  const env = setup(t, undefined, {
+    activeScope: () => ({ hostId: "remote-ssh-selected" }),
+  });
+  await env.coordinator.start();
+  await assert.rejects(
+    env.coordinator.fetchRequest(
+      "vscode://codex/codex-home",
+      undefined,
+      async () => {
+        throw new Error("Selected home unavailable");
+      },
+      JSON.stringify({ hostId: "remote-ssh-selected" }),
+    ),
+    /Selected home unavailable/,
+  );
+  assert.equal(env.coordinator.failed, true);
+});
+
+test("foreground SSH recovery requires that host and conversation, not other hosts or sidebar reads", async (t) => {
+  const env = setup(t, undefined, {
+    requiresHistory: () => true,
+    activeScope: () => ({
+      hostId: "remote-ssh-selected",
+      threadId: "foreground",
+    }),
+  });
+  const services = await env.coordinator.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    env.coordinator.observeNative({
+      method,
+      hostId: "local",
+      type: "completed",
+    });
+  assert.equal(env.coordinator.diagnostics().stages.models, undefined);
+  const hostId = "remote-ssh-selected";
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    env.coordinator.observeNative({ method, hostId, type: "completed" });
+  env.coordinator.observeNative({
+    hostId,
+    method: "thread/read",
+    id: "background",
+    params: { threadId: "sidebar" },
+    type: "started",
+  });
+  env.coordinator.observeNative({
+    hostId,
+    method: "thread/read",
+    id: "background",
+    type: "failed",
+  });
+  assert.equal(env.coordinator.diagnostics().stages.history, undefined);
+  assert.deepEqual(env.coordinator.diagnostics().requiredFailures, []);
+  env.coordinator.observeNative({
+    hostId,
+    method: "thread/resume",
+    id: "active",
+    params: { threadId: "foreground" },
+    type: "started",
+  });
+  env.coordinator.observeNative({
+    hostId,
+    method: "thread/resume",
+    id: "active",
+    type: "failed",
+  });
+  assert.deepEqual(env.coordinator.diagnostics().requiredFailures, [
+    `${hostId}:thread/resume`,
+  ]);
+  env.coordinator.observeNative({
+    hostId,
+    method: "thread/resume",
+    id: "retry",
+    params: { threadId: "foreground" },
+    type: "started",
+  });
+  env.coordinator.observeNative({
+    hostId,
+    method: "thread/resume",
+    id: "retry",
+    type: "completed",
+  });
+  await settle();
+  t.mock.timers.tick(61_000);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, false);
+  assert.equal(env.coordinator.diagnostics().stages.history.state, "completed");
 });

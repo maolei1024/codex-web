@@ -57,8 +57,6 @@ const NATIVE_READS = new Set([
   "config/read",
   "configRequirements/read",
   "model/list",
-  "account/read",
-  "thread/list",
   "thread/read",
   "thread/resume",
 ]);
@@ -99,6 +97,7 @@ export class AppHostRecovery {
   };
   private retrying = 0;
   private requiredFailures = new Set<string>();
+  private nativeThreads = new Map<string, string | undefined>();
   private exhausted = false;
   private pending = new Set<Pending>();
   private subscriptions = new Set<Subscription>();
@@ -117,6 +116,10 @@ export class AppHostRecovery {
   constructor(
     private readonly now = Date.now,
     private readonly requiresHistory = () => false,
+    private readonly activeScope: () => {
+      hostId: string;
+      threadId?: string;
+    } = () => ({ hostId: "local" }),
   ) {
     this.facade = this.proxy([]);
   }
@@ -156,6 +159,7 @@ export class AppHostRecovery {
         .length,
       subscriptions: this.subscriptions.size,
       exhausted: this.exhausted,
+      requiredFailures: [...this.requiredFailures],
       stages: { ...this.stages },
       events: this.events.slice(),
     };
@@ -163,6 +167,9 @@ export class AppHostRecovery {
   observeNative(event: {
     method?: string;
     hostId?: string;
+    id?: string | number;
+    conversationId?: string;
+    params?: { threadId?: string };
     type: string;
     durationMs?: number;
   }) {
@@ -171,7 +178,6 @@ export class AppHostRecovery {
         "config/read": "configuration",
         "configRequirements/read": "requirements",
         "model/list": "models",
-        "thread/list": "lists",
         "thread/read": "history",
         "thread/resume": "history",
       } as Record<string, string>
@@ -187,9 +193,17 @@ export class AppHostRecovery {
       this.now() - (event.durationMs ?? 0),
       event.type,
     );
-    // Durable cloud threads have their own authentication and connection.
-    // Their optional reads must not retire the local/SSH browser bridge.
-    if (event.hostId === "durable") return;
+    const key = JSON.stringify([event.hostId ?? "local", event.id]);
+    const threadId =
+      event.params?.threadId ??
+      event.conversationId ??
+      this.nativeThreads.get(key);
+    if (event.type === "started" && event.id != null)
+      this.nativeThreads.set(key, threadId);
+    else this.nativeThreads.delete(key);
+    // Desktop preloads other hosts and sidebar conversations during startup.
+    // Their missing histories/authentication must fail only their own callers.
+    if (!this.requiredNativeRead(event.method!, event.hostId, threadId)) return;
     // Native clients also report background reads and write preparation. Their
     // errors belong to the caller, not to a completed startup cycle. In
     // particular, an inactive thread read must not poison the next foreground
@@ -205,6 +219,21 @@ export class AppHostRecovery {
       );
       this.maybeReady();
     }
+  }
+  private requiredNativeRead(
+    method: string,
+    hostId = "local",
+    threadId?: string,
+  ) {
+    const scope = this.activeScope();
+    return (
+      hostId !== "durable" &&
+      hostId === scope.hostId &&
+      NATIVE_READS.has(method) &&
+      (!method.startsWith("thread/") ||
+        (this.requiresHistory() &&
+          (scope.threadId == null || threadId === scope.threadId)))
+    );
   }
   private maybeReady() {
     if (
@@ -231,12 +260,12 @@ export class AppHostRecovery {
     method: string,
     operation: (timeoutMs?: number) => Promise<T>,
     hostId?: string,
+    params?: { threadId?: string },
   ): Promise<T> {
     // Once ready, a read preparing a user write fails back to that caller. It
     // must never keep a pending send alive until a later automatic recovery.
     if (
-      hostId === "durable" ||
-      !NATIVE_READS.has(method) ||
+      !this.requiredNativeRead(method, hostId, params?.threadId) ||
       (this.everReady && !this.cycle)
     )
       return operation();
@@ -396,6 +425,7 @@ export class AppHostRecovery {
   }
   disconnect(reason = "disconnected") {
     const old = this.session;
+    this.nativeThreads.clear();
     this.session = undefined;
     this.current = undefined;
     this.initialSettings = false;
@@ -524,12 +554,24 @@ export class AppHostRecovery {
     url: string,
     signal: AbortSignal | undefined,
     operation: (signal: AbortSignal) => Promise<T>,
+    body?: unknown,
   ): Promise<T> {
     const endpoint = url.startsWith("vscode://codex/")
       ? url.slice("vscode://codex/".length)
       : "fetch";
     const method = /^[a-z][a-z0-9-]{0,79}$/.test(endpoint) ? endpoint : "fetch";
-    const readonly = STARTUP_FETCH_READS.has(method);
+    let hostId: unknown;
+    try {
+      const params = typeof body === "string" ? JSON.parse(body) : body;
+      if (params && typeof params === "object" && "hostId" in params)
+        hostId = params.hostId;
+    } catch {
+      // Invalid request bodies still fail through the original Desktop handler.
+    }
+    const readonly =
+      STARTUP_FETCH_READS.has(method) &&
+      (hostId == null || hostId === this.activeScope().hostId) &&
+      hostId !== "durable";
     const run = () => {
       signal?.throwIfAborted();
       const controller = new AbortController();

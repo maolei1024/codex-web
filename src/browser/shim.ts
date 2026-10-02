@@ -199,8 +199,14 @@ let hasReconnected = false;
 let connectionWatchdog: ConnectionWatchdog | null = null;
 let reconnectRecoveryTimeoutId: number | null = null;
 const reconnectRecovery = new ReconnectRecovery();
-const appHostRecovery = new AppHostRecovery(Date.now, () =>
-  window.location.pathname.startsWith("/thread/"),
+const appHostRecovery = new AppHostRecovery(
+  Date.now,
+  () => window.location.pathname.startsWith("/thread/"),
+  () => ({
+    hostId:
+      new URLSearchParams(window.location.search).get("hostId") ?? "local",
+    threadId: window.location.pathname.match(/^\/thread\/([^/]+)/)?.[1],
+  }),
 );
 let retryBoot: (() => void) | undefined;
 let recoveringAppHost: Promise<void> | undefined;
