@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import http from "node:http";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -15,8 +17,9 @@ const {
 const TOKEN = "integration-secret";
 
 const LOCAL_BUILD = JSON.parse(await readFile("local-build.json", "utf8")).id;
-const ENTRY_ASSET = (await readFile("scratch/asar/webview/index.html", "utf8"))
-  .match(/src="([^\"]*\/index-[^\"]+\.js)"/)[1];
+const ENTRY_ASSET = (
+  await readFile("scratch/asar/webview/index.html", "utf8")
+).match(/src="([^\"]*\/index-[^\"]+\.js)"/)[1];
 
 function options(overrides = {}) {
   return {
@@ -110,6 +113,117 @@ test("authenticated liveness replies stay on the requesting socket and bypass De
     if (a) await closeWebSocket(a);
     if (b) await closeWebSocket(b);
     await app.close();
+  }
+});
+
+test("negotiated Statsig snapshots leave startup IPC responsive and preserve legacy clients", async () => {
+  const bridge = (globalThis.__codexElectronIpcBridge ??= {});
+  const previousHandler = bridge.handleRendererInvoke;
+  const key = "statsig_evaluations";
+  let value = {
+    accountId: "original",
+    fullPayload: "evaluations".repeat(500000),
+    enabled: false,
+  };
+  const update = () => ({
+    type: "ipc-main-event",
+    channel: "codex_desktop:message-for-view",
+    args: [{ type: "shared-object-updated", key, value }],
+  });
+  bridge.handleRendererInvoke = async (_channel, [event]) => {
+    if (event.type === "shared-object-set") value = event.value;
+    if (["shared-object-subscribe", "shared-object-set"].includes(event.type))
+      bridge.broadcastToRenderer(update());
+    return null;
+  };
+  const app = await startIpcBridgeServer(options(), {
+    launchDesktopApp: false,
+  });
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const id = randomUUID();
+  const modern = await openWebSocket(
+    `${base.replace("http:", "ws:")}/__backend/ipc?token=${TOKEN}&sharedObjectHttp=1&clientId=${id}`,
+  );
+  const old = await openWebSocket(
+    `${base.replace("http:", "ws:")}/__backend/ipc?token=${TOKEN}`,
+  );
+  const frames = [],
+    legacy = [];
+  modern.on("message", (raw) => frames.push(JSON.parse(raw)));
+  old.on("message", (raw) => legacy.push(JSON.parse(raw)));
+  async function invoke(socket, event) {
+    const requestId = randomUUID();
+    const done = new Promise((resolve) => {
+      const listener = (raw) => {
+        const message = JSON.parse(raw);
+        if (message.requestId === requestId) {
+          socket.off("message", listener);
+          resolve(message);
+        }
+      };
+      socket.on("message", listener);
+    });
+    socket.send(
+      JSON.stringify({
+        type: "ipc-renderer-invoke",
+        requestId,
+        channel: "codex_desktop:message-from-view",
+        args: [event],
+      }),
+    );
+    assert.equal((await done).ok, true);
+  }
+  try {
+    await invoke(old, { type: "shared-object-subscribe", key });
+    await invoke(modern, { type: "shared-object-subscribe", key });
+    assert.deepEqual(legacy.at(-2) ?? legacy[0], update());
+    assert.ok(frames.every((frame) => JSON.stringify(frame).length < 200));
+    const revision = frames.findLast(
+      (frame) => frame.type === "shared-object-http-update",
+    ).revision;
+    // Leave the large HTTP body unread while a critical IPC request completes.
+    const response = await fetch(
+      `${base}/__backend/shared-object/statsig-evaluations?clientId=${id}&revision=${revision}`,
+      { headers: { cookie: `codex_web_token=${TOKEN}` } },
+    );
+    assert.equal(response.status, 200);
+    const pong = once(modern, "message");
+    modern.send(
+      JSON.stringify({ type: "bridge-ping", requestId: "startup-liveness" }),
+    );
+    assert.deepEqual(JSON.parse((await pong)[0]), {
+      type: "bridge-pong",
+      requestId: "startup-liveness",
+    });
+    assert.deepEqual(await response.json(), update());
+    const publish = await fetch(
+      `${base}/__backend/shared-object/statsig-evaluations?clientId=${id}`,
+      {
+        method: "POST",
+        headers: {
+          cookie: `codex_web_token=${TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ type: "shared-object-set", key, value: null }),
+      },
+    );
+    assert.equal(publish.status, 200);
+    assert.equal(value, null);
+    await invoke(modern, { type: "shared-object-unsubscribe", key });
+    assert.equal(
+      (
+        await fetch(
+          `${base}/__backend/shared-object/statsig-evaluations?clientId=${id}&revision=3`,
+          { headers: { cookie: `codex_web_token=${TOKEN}` } },
+        )
+      ).status,
+      409,
+    );
+  } finally {
+    await closeWebSocket(modern);
+    await closeWebSocket(old);
+    await app.close();
+    bridge.handleRendererInvoke = previousHandler;
   }
 });
 
@@ -432,11 +546,7 @@ test("versioned preload is immutable; unversioned preload revalidates and all as
         }
       }
     }
-    const immutable = await requestRaw(
-      port,
-      ENTRY_ASSET,
-      { cookie },
-    );
+    const immutable = await requestRaw(port, ENTRY_ASSET, { cookie });
     assert.equal(immutable.status, 200);
     assert.match(immutable.headers["cache-control"], /immutable/);
     assert.equal(

@@ -41,11 +41,24 @@ function setup(
     }
   }
   const settings = new Settings();
+  class FolderConsent extends rpc.Target {
+    async subscribe(callback) {
+      callbacks.add(callback);
+      callback.onRpcBroken(() => callbacks.delete(callback));
+      await callback("initial consent");
+      return new (class extends rpc.Target {
+        unsubscribe() {
+          callbacks.delete(callback);
+        }
+      })();
+    }
+  }
   class Host extends rpc.Target {
     get services() {
       return {
         settings,
         accessInputs: settings,
+        projectFolderConsent: new FolderConsent(),
         startup: new (class extends rpc.Target {
           whenReady() {}
         })(),
@@ -113,6 +126,34 @@ test("Desktop account subscriptions retain RPC broken notifications before and a
   await settle();
   assert.equal(env.callbacks.size, 0);
   assert.deepEqual(failures, []);
+});
+
+test("Desktop folder consent supports synchronous effect cleanup before and after RPC resolution", async (t) => {
+  const env = setup(t);
+  const services = await env.coordinator.start();
+  const early = services.projectFolderConsent.subscribe(() => {});
+  early.unsubscribe();
+  early[Symbol.dispose]();
+  await early;
+  await settle();
+  assert.equal(env.callbacks.size, 0);
+  assert.equal(env.coordinator.diagnostics().subscriptions, 0);
+  const updates = [];
+  const live = services.projectFolderConsent.subscribe((value) =>
+    updates.push(value),
+  );
+  await live;
+  assert.deepEqual(updates, ["initial consent"]);
+  env.coordinator.disconnect();
+  await env.coordinator.recover();
+  await settle();
+  assert.equal(env.callbacks.size, 1);
+  assert.deepEqual(updates, ["initial consent", "initial consent"]);
+  live.unsubscribe();
+  live[Symbol.dispose]();
+  await settle();
+  assert.equal(env.callbacks.size, 0);
+  assert.equal(env.coordinator.diagnostics().subscriptions, 0);
 });
 
 test("settings that never reply stop after two retries and clean the real native RPC", async (t) => {

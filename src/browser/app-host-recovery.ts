@@ -61,6 +61,7 @@ const NATIVE_READS = new Set([
   "thread/resume",
 ]);
 const SUBSCRIPTIONS = new Set([
+  "projectFolderConsent.subscribe",
   "accessInputs.subscribe",
   "settings.subscribe",
   "terminal.subscribe",
@@ -670,6 +671,8 @@ export class AppHostRecovery {
       try {
         const value = await this.invoke(entry.path, args);
         if (!entry.active || generation !== this.generation) {
+          if (entry.path[0] === "projectFolderConsent")
+            void (value as any)?.unsubscribe?.().catch?.(() => {});
           (value as any)?.[Symbol.dispose]?.();
           return;
         }
@@ -697,10 +700,13 @@ export class AppHostRecovery {
     };
     this.subscriptions.add(entry);
     const dispose = () => {
+      if (!entry.active) return;
       entry.active = false;
       this.subscriptions.delete(entry);
       if (entry.generation === this.generation) {
         try {
+          if (path[0] === "projectFolderConsent")
+            void entry.value?.unsubscribe?.().catch?.(() => {});
           entry.value?.[Symbol.dispose]?.();
         } catch {}
       }
@@ -716,7 +722,11 @@ export class AppHostRecovery {
       },
     );
     void task.catch(() => {});
-    Object.defineProperty(task, Symbol.dispose, { value: () => {} });
+    // Desktop uses this pipelined RPC handle synchronously during effect cleanup.
+    Object.defineProperty(task, "unsubscribe", { value: dispose });
+    Object.defineProperty(task, Symbol.dispose, {
+      value: path[0] === "projectFolderConsent" ? dispose : () => {},
+    });
     Object.defineProperty(task, "onRpcBroken", { value: onRpcBroken });
     return task;
   }

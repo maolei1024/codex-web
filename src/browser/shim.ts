@@ -15,6 +15,7 @@ import { reconnectDelayMs } from "./reconnect";
 import { RpcLifecycle, isTransportFailure } from "./rpc-lifecycle";
 import { ReconnectRecovery } from "./reconnect-recovery";
 import { ConnectionWatchdog } from "./connection-watchdog";
+import { SharedObjectHttpClient } from "./shared-object-http";
 import { AppHostRecovery, STARTUP_FETCH_READS } from "./app-host-recovery";
 import { recoveryNotice, checkForUpdate } from "./recovery-notice";
 import {
@@ -79,6 +80,7 @@ type RendererToMainMessage =
 
 type MainToRendererMessage =
   | { type: "bridge-pong"; requestId: string }
+  | { type: "shared-object-http-update"; revision: number }
   | {
       type: "ipc-main-event";
       channel: string;
@@ -166,6 +168,7 @@ declare const __CODEX_WEB_BUILD_ID__: string;
 
 let requestCounter = 0;
 let socket: WebSocket | null = null;
+let sharedObjectHttp: SharedObjectHttpClient | null = null;
 let reconnectTimeoutId: number | null = null;
 let reconnectAttempt = 0;
 let consecutiveConnectFailures = 0;
@@ -281,6 +284,10 @@ export function emitRendererEvent(channel: string, args: unknown[]): void {
 }
 
 function handleIncomingMessage(message: MainToRendererMessage): void {
+  if (message.type === "shared-object-http-update") {
+    sharedObjectHttp?.changed(message.revision);
+    return;
+  }
   if (message.type === "bridge-pong") {
     connectionWatchdog?.pong(message.requestId);
     return;
@@ -430,6 +437,8 @@ function reconnectNow(): void {
 function forceReconnect(): void {
   const previousSocket = socket;
   if (previousSocket) {
+    sharedObjectHttp?.close();
+    sharedObjectHttp = null;
     socket = null;
     connectionWatchdog?.stop();
     connectionWatchdog = null;
@@ -489,8 +498,18 @@ function ensureSocket(): void {
     return;
   }
 
+  sharedObjectHttp?.close();
+  const currentSharedObjectHttp = new SharedObjectHttpClient(
+    handleIncomingMessage,
+    (error) =>
+      console.warn(
+        "[electron-stub] shared feature configuration transfer failed",
+        error,
+      ),
+  );
+  sharedObjectHttp = currentSharedObjectHttp;
   const currentSocket = new WebSocket(
-    `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/__backend/ipc`,
+    `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/__backend/ipc?sharedObjectHttp=1&clientId=${currentSharedObjectHttp.clientId}`,
   );
   socket = currentSocket;
   connectionWatchdog = new ConnectionWatchdog(() => {
@@ -504,6 +523,7 @@ function ensureSocket(): void {
       return;
     }
     opened = true;
+    currentSharedObjectHttp.open();
     connectionWatchdog?.opened();
     reconnectRecovery.begin();
     reconnectAttempt = 0;
@@ -556,10 +576,12 @@ function ensureSocket(): void {
     }
   });
   currentSocket.addEventListener("close", () => {
+    currentSharedObjectHttp.close();
     if (socket !== currentSocket) {
       return;
     }
     socket = null;
+    sharedObjectHttp = null;
     connectionWatchdog?.stop();
     connectionWatchdog = null;
     if (!opened) {
@@ -861,6 +883,18 @@ electronShim.onMemoryNavigationChanged = (navigation) => {
 export const ipcRenderer = {
   invoke(channel: string, ...args: unknown[]): Promise<unknown> {
     if (channel === "codex_desktop:message-from-view" && args.length === 1) {
+      const event = args[0];
+      if (
+        isRecord(event) &&
+        event.type === "shared-object-set" &&
+        event.key === "statsig_evaluations"
+      ) {
+        ensureSocket();
+        return (
+          sharedObjectHttp?.publish(event) ??
+          Promise.reject(new Error(DISCONNECT_ERROR_MESSAGE))
+        );
+      }
       if (isOpenInBrowserMessage(args[0])) {
         window.open(args[0].url, "_blank", "noopener,noreferrer");
       }

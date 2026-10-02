@@ -48,6 +48,8 @@ forwards SDK headers and query parameters, and never forwards Web cookies or
 account authorization. It preserves upstream values and denials, rejects redirects,
 uses no-store responses with gzip, and bounds time, payload size and concurrency.
 Other Desktop HTTP requests keep their native transport.
+The Electron request adapter supports response streams, manual redirects and
+idempotent cancellation; canceling a website preview cannot terminate the host.
 React tracks a shared initialization Promise per SDK client, rather than a render's
 local loading flag. Interrupted initial renders therefore wake when the SDK finishes;
 initialization failures remain errors and cannot fabricate a ready client.
@@ -57,6 +59,17 @@ clients; disconnects release Desktop subscription references, so refreshes do
 not accumulate subscriptions or queue unused configuration ahead of history.
 The browser restores active subscriptions on reconnect before flushing pending
 subscription changes, including after failed connection attempts.
+New Desktop consumers also subscribe to evaluations. For negotiated clients,
+`statsig_evaluations` publication and readback use authenticated, gzip-capable
+`/__backend/shared-object/statsig-evaluations` HTTP requests. The WebSocket carries
+only revision notifications, so a slow transfer cannot block configuration or
+model reads. The route is limited to the current 8 MiB snapshot and four concurrent
+requests, requires a live connection (and subscription for reads), and never caches
+responses. Revision and connection guards discard late snapshots; writes retain
+their order and are never replayed on reconnect. Older tabs keep the original
+WebSocket protocol until refreshed. Reverse proxies using HTTP/2 must also allow
+enough requests per connection for the Desktop's several hundred startup assets;
+a request limit below the advertised concurrent-stream limit can refuse imports.
 
 The Web bridge tracks app-server requests through their actual replies, separately
 from IPC acknowledgements. Disconnects reject pending requests so the composer can

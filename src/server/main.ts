@@ -29,6 +29,7 @@ import { sanitizeMcpRequestPaths } from "./mcp-request-path-sanitizer";
 import { readAssetVersion } from "./asset-version";
 import { installDownloadHooks } from "./downloads";
 import { installFeatureConfigRoute } from "./feature-config";
+import { SharedObjectHttp } from "./shared-object-http";
 import {
   parsePositiveInteger,
   UploadLimitError,
@@ -96,6 +97,7 @@ type RendererToMainMessage =
 
 type MainToRendererMessage =
   | { type: "bridge-pong"; requestId: string }
+  | { type: "shared-object-http-update"; revision: number }
   | {
       type: "ipc-main-event";
       channel: string;
@@ -595,12 +597,19 @@ export async function startIpcBridgeServer(
   // Desktop sees a single renderer. Balance its reference-counted subscriptions
   // across browser sockets, including sockets lost during refresh/reconnect.
   const sharedObjectSubscriptions = new Map<WebSocket, Map<string, number>>();
+  const sharedObjectHttp = new SharedObjectHttp();
+  const httpClients = new Map<WebSocket, string>();
   const viewMessageChannel = "codex_desktop:message-from-view";
 
   if (options.token !== null) {
     installAuthHook(app, options.token);
   }
   await installFeatureConfigRoute(app);
+  await sharedObjectHttp.install(app, (event) => {
+    if (!bridgeState.handleRendererInvoke)
+      throw new Error("Desktop bridge unavailable");
+    return bridgeState.handleRendererInvoke(viewMessageChannel, [event]);
+  });
 
   await app.register(fastifyMultipart, {
     throwFileSizeLimit: true,
@@ -782,6 +791,10 @@ export async function startIpcBridgeServer(
       event?.type === "shared-object-updated" && typeof event.key === "string"
         ? event.key
         : null;
+    const revision =
+      sharedKey === "statsig_evaluations"
+        ? sharedObjectHttp.capture(message)
+        : null;
     let payload: string | undefined;
     for (const socket of sockets) {
       if (
@@ -789,23 +802,48 @@ export async function startIpcBridgeServer(
         (sharedKey === null ||
           sharedObjectSubscriptions.get(socket)?.has(sharedKey))
       ) {
-        // Do not serialize large snapshots when nobody is reading them.
-        socket.send((payload ??= JSON.stringify(message)));
+        // Older tabs retain the original protocol until the user refreshes.
+        if (revision !== null && httpClients.has(socket)) {
+          socket.send(
+            JSON.stringify({ type: "shared-object-http-update", revision }),
+          );
+        } else {
+          // Do not serialize large snapshots when nobody is reading them.
+          socket.send((payload ??= JSON.stringify(message)));
+        }
       }
     }
   };
 
-  websocketServer.on("connection", (socket) => {
+  websocketServer.on("connection", (socket, request) => {
+    // Also consume protocol errors on a rejected capability handshake.
+    socket.on("error", () => {});
     sockets.add(socket);
     missedPings.set(socket, 0);
     const subscriptions = new Map<string, number>();
     sharedObjectSubscriptions.set(socket, subscriptions);
+    const parameters = new URL(request.url ?? "/", "http://localhost")
+      .searchParams;
+    if (parameters.get("sharedObjectHttp") === "1") {
+      const clientId = parameters.get("clientId") ?? "";
+      if (
+        !/^[0-9a-f-]{36}$/.test(clientId) ||
+        !sharedObjectHttp.connect(clientId, () =>
+          subscriptions.has("statsig_evaluations"),
+        )
+      ) {
+        sockets.delete(socket);
+        missedPings.delete(socket);
+        sharedObjectSubscriptions.delete(socket);
+        socket.close(1008, "invalid shared object client");
+        return;
+      }
+      httpClients.set(socket, clientId);
+    }
 
     // ws already closes protocol/size/decompression failures with the correct
     // close code. Consume its error event so a rejected frame cannot terminate
     // the Node process, and never log frame data or authentication material.
-    socket.on("error", () => {});
-
     const messagePorts = new Map<string, WebSocketMessagePort>();
     portCounts.set(socket, messagePorts);
     const dispatchPostMessage = (
@@ -832,6 +870,9 @@ export async function startIpcBridgeServer(
     });
 
     socket.on("close", () => {
+      const clientId = httpClients.get(socket);
+      if (clientId) sharedObjectHttp.disconnect(clientId);
+      httpClients.delete(socket);
       sockets.delete(socket);
       portCounts.delete(socket);
       missedPings.delete(socket);
