@@ -227,6 +227,92 @@ test("negotiated Statsig snapshots leave startup IPC responsive and preserve leg
   }
 });
 
+test("native binary HTTP bypasses both WebSockets and cancels an aborted read", async () => {
+  const bridge = (globalThis.__codexElectronIpcBridge ??= {});
+  const previous = bridge.handleRendererInvoke;
+  const calls = [];
+  let hold = false;
+  bridge.handleRendererInvoke = async (_channel, [event]) => {
+    calls.push(event);
+    if (event.type === "fetch" && !hold)
+      bridge.broadcastToRenderer({
+        type: "ipc-main-event",
+        channel: "codex_desktop:message-for-view",
+        args: [
+          {
+            type: "fetch-response",
+            responseType: "success",
+            requestId: event.requestId,
+            status: 200,
+            bodyJsonString: JSON.stringify({ base64: "x".repeat(1500000) }),
+          },
+        ],
+      });
+    return null;
+  };
+  const app = await startIpcBridgeServer(options(), {
+    launchDesktopApp: false,
+  });
+  const base = `http://127.0.0.1:${app.server.address().port}`,
+    clientId = randomUUID();
+  const modern = await openWebSocket(
+    `${base.replace("http:", "ws:")}/__backend/ipc?token=${TOKEN}&sharedObjectHttp=1&binaryReadHttp=1&clientId=${clientId}`,
+  );
+  const legacy = await openWebSocket(
+    `${base.replace("http:", "ws:")}/__backend/ipc?token=${TOKEN}`,
+  );
+  const frames = [];
+  for (const socket of [modern, legacy])
+    socket.on("message", (raw) => frames.push(JSON.parse(raw)));
+  const read = (signal) =>
+    fetch(`${base}/__backend/binary-read?clientId=${clientId}`, {
+      method: "POST",
+      signal,
+      headers: {
+        cookie: `codex_web_token=${TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "fetch",
+        requestId: randomUUID(),
+        url: "vscode://codex/read-file-binary",
+        body: "{}",
+      }),
+    });
+  try {
+    const result = await read();
+    const pong = once(modern, "message");
+    modern.send(
+      JSON.stringify({ type: "bridge-ping", requestId: "bulk-read-ping" }),
+    );
+    assert.equal(JSON.parse((await pong)[0]).type, "bridge-pong");
+    assert.equal(
+      JSON.parse((await result.json()).bodyJsonString).base64.length,
+      1500000,
+    );
+    assert.ok(frames.every((frame) => frame.type === "bridge-pong"));
+    hold = true;
+    const controller = new AbortController();
+    const aborting = assert.rejects(read(controller.signal), /abort/i);
+    for (let i = 0; i < 100 && calls.length < 2; i++)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(calls.length, 2);
+    controller.abort();
+    await aborting;
+    for (let i = 0; i < 100 && calls.length < 3; i++)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(calls[2], {
+      type: "cancel-fetch",
+      requestId: calls[1].requestId,
+    });
+  } finally {
+    await closeWebSocket(modern);
+    await closeWebSocket(legacy);
+    await app.close();
+    bridge.handleRendererInvoke = previous;
+  }
+});
+
 test("shared objects stay within subscribing tabs and disconnect releases references", async () => {
   const bridge = (globalThis.__codexElectronIpcBridge ??= {});
   const previousHandler = bridge.handleRendererInvoke;

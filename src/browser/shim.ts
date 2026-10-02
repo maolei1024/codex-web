@@ -16,6 +16,11 @@ import { RpcLifecycle, isTransportFailure } from "./rpc-lifecycle";
 import { ReconnectRecovery } from "./reconnect-recovery";
 import { ConnectionWatchdog } from "./connection-watchdog";
 import { SharedObjectHttpClient } from "./shared-object-http";
+import {
+  BinaryReadHttpClient,
+  isBinaryRead,
+  isOversizedDiagnosticLog,
+} from "./binary-read-http";
 import { AppHostRecovery, STARTUP_FETCH_READS } from "./app-host-recovery";
 import { recoveryNotice, checkForUpdate } from "./recovery-notice";
 import {
@@ -169,6 +174,8 @@ declare const __CODEX_WEB_BUILD_ID__: string;
 let requestCounter = 0;
 let socket: WebSocket | null = null;
 let sharedObjectHttp: SharedObjectHttpClient | null = null;
+let binaryReadHttp: BinaryReadHttpClient | null = null;
+let oversizedLogReported = false;
 let reconnectTimeoutId: number | null = null;
 let reconnectAttempt = 0;
 let consecutiveConnectFailures = 0;
@@ -439,6 +446,8 @@ function forceReconnect(): void {
   if (previousSocket) {
     sharedObjectHttp?.close();
     sharedObjectHttp = null;
+    binaryReadHttp?.close();
+    binaryReadHttp = null;
     socket = null;
     connectionWatchdog?.stop();
     connectionWatchdog = null;
@@ -499,6 +508,7 @@ function ensureSocket(): void {
   }
 
   sharedObjectHttp?.close();
+  binaryReadHttp?.close();
   const currentSharedObjectHttp = new SharedObjectHttpClient(
     handleIncomingMessage,
     (error) =>
@@ -508,8 +518,13 @@ function ensureSocket(): void {
       ),
   );
   sharedObjectHttp = currentSharedObjectHttp;
+  const currentBinaryReadHttp = new BinaryReadHttpClient(
+    currentSharedObjectHttp.clientId,
+    (event) => emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [event]),
+  );
+  binaryReadHttp = currentBinaryReadHttp;
   const currentSocket = new WebSocket(
-    `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/__backend/ipc?sharedObjectHttp=1&clientId=${currentSharedObjectHttp.clientId}`,
+    `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/__backend/ipc?sharedObjectHttp=1&binaryReadHttp=1&clientId=${currentSharedObjectHttp.clientId}`,
   );
   socket = currentSocket;
   connectionWatchdog = new ConnectionWatchdog(() => {
@@ -524,6 +539,7 @@ function ensureSocket(): void {
     }
     opened = true;
     currentSharedObjectHttp.open();
+    currentBinaryReadHttp.open();
     connectionWatchdog?.opened();
     reconnectRecovery.begin();
     reconnectAttempt = 0;
@@ -577,11 +593,13 @@ function ensureSocket(): void {
   });
   currentSocket.addEventListener("close", () => {
     currentSharedObjectHttp.close();
+    currentBinaryReadHttp.close();
     if (socket !== currentSocket) {
       return;
     }
     socket = null;
     sharedObjectHttp = null;
+    binaryReadHttp = null;
     connectionWatchdog?.stop();
     connectionWatchdog = null;
     if (!opened) {
@@ -884,6 +902,29 @@ export const ipcRenderer = {
   invoke(channel: string, ...args: unknown[]): Promise<unknown> {
     if (channel === "codex_desktop:message-from-view" && args.length === 1) {
       const event = args[0];
+      if (isOversizedDiagnosticLog(event)) {
+        if (!oversizedLogReported) {
+          oversizedLogReported = true;
+          console.warn(
+            "[electron-stub] oversized diagnostic log omitted from IPC",
+          );
+        }
+        return Promise.resolve();
+      }
+      if (isBinaryRead(event)) {
+        ensureSocket();
+        return (
+          binaryReadHttp?.read(event) ??
+          Promise.reject(new Error(DISCONNECT_ERROR_MESSAGE))
+        );
+      }
+      if (
+        isRecord(event) &&
+        event.type === "cancel-fetch" &&
+        typeof event.requestId === "string" &&
+        binaryReadHttp?.cancel(event.requestId)
+      )
+        return Promise.resolve();
       if (
         isRecord(event) &&
         event.type === "shared-object-set" &&

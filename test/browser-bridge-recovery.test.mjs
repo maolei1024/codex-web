@@ -17,6 +17,7 @@ const modules = Object.fromEntries(
       "connection-watchdog",
       "shared-object-subscriptions",
       "shared-object-http",
+      "binary-read-http",
       "reconnect",
       "app-host-recovery",
       "crypto-compat",

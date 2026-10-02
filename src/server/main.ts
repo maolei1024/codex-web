@@ -30,6 +30,7 @@ import { readAssetVersion } from "./asset-version";
 import { installDownloadHooks } from "./downloads";
 import { installFeatureConfigRoute } from "./feature-config";
 import { SharedObjectHttp } from "./shared-object-http";
+import { BinaryReadHttp } from "./binary-read-http";
 import {
   parsePositiveInteger,
   UploadLimitError,
@@ -598,6 +599,7 @@ export async function startIpcBridgeServer(
   // across browser sockets, including sockets lost during refresh/reconnect.
   const sharedObjectSubscriptions = new Map<WebSocket, Map<string, number>>();
   const sharedObjectHttp = new SharedObjectHttp();
+  const binaryReadHttp = new BinaryReadHttp();
   const httpClients = new Map<WebSocket, string>();
   const viewMessageChannel = "codex_desktop:message-from-view";
 
@@ -606,6 +608,11 @@ export async function startIpcBridgeServer(
   }
   await installFeatureConfigRoute(app);
   await sharedObjectHttp.install(app, (event) => {
+    if (!bridgeState.handleRendererInvoke)
+      throw new Error("Desktop bridge unavailable");
+    return bridgeState.handleRendererInvoke(viewMessageChannel, [event]);
+  });
+  await binaryReadHttp.install(app, (event) => {
     if (!bridgeState.handleRendererInvoke)
       throw new Error("Desktop bridge unavailable");
     return bridgeState.handleRendererInvoke(viewMessageChannel, [event]);
@@ -782,6 +789,7 @@ export async function startIpcBridgeServer(
   });
 
   bridgeState.broadcastToRenderer = (message: MainToRendererMessage): void => {
+    if (binaryReadHttp.capture(message)) return;
     const event =
       message.type === "ipc-main-event" &&
       message.channel === "codex_desktop:message-for-view"
@@ -839,6 +847,8 @@ export async function startIpcBridgeServer(
         return;
       }
       httpClients.set(socket, clientId);
+      if (parameters.get("binaryReadHttp") === "1")
+        binaryReadHttp.connect(clientId);
     }
 
     // ws already closes protocol/size/decompression failures with the correct
@@ -872,6 +882,7 @@ export async function startIpcBridgeServer(
     socket.on("close", () => {
       const clientId = httpClients.get(socket);
       if (clientId) sharedObjectHttp.disconnect(clientId);
+      if (clientId) binaryReadHttp.disconnect(clientId);
       httpClients.delete(socket);
       sockets.delete(socket);
       portCounts.delete(socket);
