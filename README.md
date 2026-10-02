@@ -92,9 +92,15 @@ replayed. Required configuration errors remain errors, with a retry notice outsi
 the React tree. Recovery retains the route, rendered history, editor and attachments;
 it does not remount the app or simulate a page refresh. Each browser channel owns its
 callback lifetime, so closing one tab cannot unregister another tab's callbacks.
+After the AppHost handshake, an idle gap waiting for lazy UI assets pauses the
+remaining startup budget. Any startup read resumes that same budget; outstanding
+RPCs and retries remain bounded. Cancelling an obsolete browser fetch rejects its
+caller without exhausting recovery for the page.
 An internal AppHost disconnect also rejects pending native app-server requests,
 even while its WebSocket is open. Conversation resume reads have the same bounded
 wait; an old zero-timeout resume cannot trap later recovery behind its Promise.
+An RPC timeout on a healthy WebSocket also schedules the full settings and native
+configuration recovery, so a caller reconnect cannot leave startup waiting forever.
 The native startup gate also reacquires readiness after recovery. An expired startup
 Promise must not trap React on its error page after a slow module download. A healthy
 root retains its editor; only a failed transport error boundary is reset.

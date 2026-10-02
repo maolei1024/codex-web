@@ -172,6 +172,99 @@ test("settings that never reply stop after two retries and clean the real native
   assert.equal(env.coordinator.diagnostics().exhausted, true);
 });
 
+test("an RPC deadline while the WebSocket is healthy requests full startup recovery", async (t) => {
+  let blocked = false,
+    notifications = 0;
+  const env = setup(t, () =>
+    blocked ? new Promise(() => {}) : { values: {}, configuredValues: {} },
+  );
+  // Use the same recovery callback as the browser, keeping the real pinned RPC.
+  const factory = env.coordinator.factory;
+  let recovering;
+  env.coordinator.configure(factory, undefined, () => {
+    if (recovering) return;
+    notifications++;
+    blocked = false;
+    recovering = env.coordinator.recover().then(() => {
+      for (const method of [
+        "config/read",
+        "configRequirements/read",
+        "model/list",
+      ])
+        env.coordinator.observeNative({
+          method,
+          hostId: "local",
+          type: "completed",
+        });
+    });
+  });
+  const services = await env.coordinator.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    env.coordinator.observeNative({
+      method,
+      hostId: "local",
+      type: "completed",
+    });
+  blocked = true;
+  const read = services.settings.readAll();
+  await settle();
+  t.mock.timers.tick(15_000);
+  await settle();
+  t.mock.timers.tick(1_000);
+  await settle();
+  await read;
+  await recovering;
+  assert.equal(notifications, 1);
+  assert.equal(env.connections, 2);
+  assert.equal(env.coordinator.initialSettings, true);
+  assert.equal(env.coordinator.initialStartup, true);
+  t.mock.timers.tick(61_000);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, false);
+});
+
+test("cancelling obsolete startup fetches rejects their callers without failing the page", async (t) => {
+  const env = setup(t);
+  const services = await env.coordinator.start();
+  const controller = new AbortController();
+  const read = env.coordinator.fetchRequest(
+    "vscode://codex/get-global-state",
+    controller.signal,
+    (signal) =>
+      new Promise((_, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+      }),
+  );
+  const cancelled = assert.rejects(read, { name: "AbortError" });
+  await settle();
+  controller.abort();
+  await cancelled;
+  await assert.rejects(
+    env.coordinator.fetchRequest(
+      "vscode://codex/codex-home",
+      controller.signal,
+      async () => assert.fail("cancelled read dispatched"),
+    ),
+    { name: "AbortError" },
+  );
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    env.coordinator.observeNative({
+      method,
+      hostId: "local",
+      type: "completed",
+    });
+  t.mock.timers.tick(61_000);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, false);
+  assert.equal(env.coordinator.diagnostics().pending, 0);
+});
+
 test("three reconnections replace native references, restore subscriptions, and never replay writes", async (t) => {
   const env = setup(t);
   const services = await env.coordinator.start();
@@ -270,6 +363,65 @@ test("required configuration failure cannot be hidden by successful display sett
   t.mock.timers.setTime(62_000);
   env.coordinator.checkDeadlines();
   assert.equal(env.coordinator.failed, true);
+});
+
+test("lazy asset download time does not consume the foreground configuration deadline", async (t) => {
+  let release;
+  const env = setup(
+    t,
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const services = await env.coordinator.start();
+  const read = services.settings.readAll();
+  await settle();
+  t.mock.timers.tick(10_000);
+  release({ values: {}, configuredValues: {} });
+  await read;
+  await services.startup.whenReady();
+  // The handshake is complete but the module issuing model/config reads has
+  // not downloaded yet. There is no outstanding RPC to time out.
+  t.mock.timers.tick(180_000);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, false);
+  assert.equal(env.coordinator.everReady, false);
+  env.coordinator.observeNative({
+    method: "config/read",
+    hostId: "local",
+    type: "started",
+  });
+  t.mock.timers.tick(49_000);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, false);
+  t.mock.timers.tick(1_000);
+  env.coordinator.checkDeadlines();
+  assert.equal(
+    env.coordinator.failed,
+    true,
+    "actual configuration retains the remaining budget, not a fresh deadline",
+  );
+});
+
+test("a startup fetch during the lazy module gap resumes the bounded budget", async (t) => {
+  const env = setup(t);
+  const services = await env.coordinator.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  t.mock.timers.tick(180_000);
+  const read = env.coordinator.fetchRequest(
+    "vscode://codex/get-shared-object-snapshot",
+    undefined,
+    () => new Promise(() => {}),
+  );
+  const rejected = assert.rejects(read);
+  await settle();
+  t.mock.timers.setTime(Date.now() + 61_000);
+  env.coordinator.checkDeadlines();
+  await rejected;
+  assert.equal(env.coordinator.failed, true);
+  assert.equal(env.coordinator.diagnostics().pending, 0);
 });
 
 test("unrelated native RPC and background HTTP cannot keep a configured page in startup", async (t) => {

@@ -95,6 +95,7 @@ export class AppHostRecovery {
     deadline: number;
     retries: number;
     waiting?: Promise<void>;
+    remainingMs?: number;
   };
   private retrying = 0;
   private requiredFailures = new Set<string>();
@@ -113,6 +114,7 @@ export class AppHostRecovery {
   private initialSettings = false;
   private initialStartup = false;
   private everReady = false;
+  private readinessStarted = false;
   private cycleTimer?: ReturnType<typeof setTimeout>;
   constructor(
     private readonly now = Date.now,
@@ -205,6 +207,7 @@ export class AppHostRecovery {
     // Desktop preloads other hosts and sidebar conversations during startup.
     // Their missing histories/authentication must fail only their own callers.
     if (!this.requiredNativeRead(event.method!, event.hostId, threadId)) return;
+    this.beginReadiness();
     // Native clients also report background reads and write preparation. Their
     // errors belong to the caller, not to a completed startup cycle. In
     // particular, an inactive thread read must not poison the next foreground
@@ -244,7 +247,23 @@ export class AppHostRecovery {
       this.retrying ||
       [...this.pending].some((request) => request.required) ||
       this.requiredFailures.size ||
-      this.exhausted ||
+      this.exhausted
+    )
+      return;
+    // AppHost can finish its handshake before the lazy UI module has loaded.
+    // Pause only that idle gap: any real read resumes the same remaining budget.
+    if (!this.everReady && !this.readinessStarted && this.cycle) {
+      if (
+        Number.isFinite(this.cycle.deadline) &&
+        this.now() < this.cycle.deadline
+      ) {
+        this.cycle.remainingMs = this.cycle.deadline - this.now();
+        this.cycle.deadline = Infinity;
+        clearTimeout(this.cycleTimer);
+      }
+      return;
+    }
+    if (
       (this.requiresHistory() && this.stages.history?.state !== "completed") ||
       Object.values(this.stages).some((stage) => stage.state === "started") ||
       ["configuration", "requirements", "models"].some(
@@ -270,6 +289,7 @@ export class AppHostRecovery {
       (this.everReady && !this.cycle)
     )
       return operation();
+    this.beginReadiness();
     return this.retry(method, async () => {
       const cycle = this.budget();
       try {
@@ -333,8 +353,27 @@ export class AppHostRecovery {
     }
     return cycle;
   }
+  private beginReadiness() {
+    if (this.readinessStarted) return;
+    this.readinessStarted = true;
+    this.resumeCycle();
+  }
+  private resumeCycle() {
+    if (this.cycle?.remainingMs != null) {
+      this.cycle.deadline = this.now() + this.cycle.remainingMs;
+      this.cycle.remainingMs = undefined;
+      clearTimeout(this.cycleTimer);
+      this.cycleTimer = setTimeout(
+        () => this.checkDeadlines(),
+        Math.max(0, this.cycle.deadline - this.now()),
+      );
+    }
+  }
   private beginCycle() {
-    if (this.cycle) return this.cycle;
+    if (this.cycle) {
+      this.resumeCycle();
+      return this.cycle;
+    }
     this.cycle = { deadline: this.now() + 60_000, retries: 0 };
     clearTimeout(this.cycleTimer);
     this.cycleTimer = setTimeout(() => this.checkDeadlines(), 60_000);
@@ -382,8 +421,13 @@ export class AppHostRecovery {
         );
         if (error) {
           cancel?.();
-          if (close && error instanceof RecoveryError)
+          if (close && error instanceof RecoveryError) {
             this.disconnect(error.reason);
+            // A local RPC deadline can retire AppHost while the WebSocket is
+            // still healthy. Reconnecting that one caller is not sufficient:
+            // settings, startup and native configuration must be read again.
+            void Promise.resolve().then(() => this.recoveryNeeded?.());
+          }
           reject(error);
         } else if (generation !== this.generation)
           reject(new RecoveryError(method, "stale"));
@@ -506,10 +550,12 @@ export class AppHostRecovery {
   private async retry<T>(
     method: string,
     operation: () => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
     this.retrying++;
     try {
       for (;;) {
+        signal?.throwIfAborted();
         // Routine reads/subscriptions continue after startup. Only an actual
         // disconnect (or initial startup) opens the shared recovery budget.
         // attempt() still bounds these reads and disconnects on transport loss.
@@ -517,6 +563,9 @@ export class AppHostRecovery {
         try {
           return await operation();
         } catch (error) {
+          // React/query owners cancel obsolete reads during normal rendering.
+          // Preserve cancellation for that caller without exhausting startup.
+          if (signal?.aborted) throw error;
           if (this.everReady && !this.cycle && this.current) throw error;
           // Application/authorization errors must not turn into synthetic success.
           const cycle = this.budget();
@@ -586,7 +635,7 @@ export class AppHostRecovery {
         () => controller.abort(new RecoveryError(method, "disconnected")),
       ).finally(() => signal?.removeEventListener("abort", abort));
     };
-    return readonly ? this.retry(method, run) : run();
+    return readonly ? this.retry(method, run, signal) : run();
   }
   /** Only explicit user retry starts a new budget after exhaustion. */
   async recover(manual = false) {
