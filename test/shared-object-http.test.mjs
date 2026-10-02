@@ -32,9 +32,12 @@ const snapshot = (revision, value) =>
   });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 async function until(predicate) {
-  for (let i = 0; i < 200; i++) {
+  // CompressionStream finishes on a worker; event-loop turns can run out before
+  // that worker is scheduled when the full suite builds/compresses in parallel.
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
     if (predicate()) return;
-    await tick();
+    await new Promise((resolve) => setTimeout(resolve, 1));
   }
   assert.fail("condition did not settle");
 }

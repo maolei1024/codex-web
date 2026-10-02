@@ -240,19 +240,19 @@ export class AppHostRecovery {
     );
   }
   private maybeReady() {
-    if (
-      !this.initialSettings ||
-      !this.initialStartup ||
+    const reading =
       this.connecting ||
       this.retrying ||
-      [...this.pending].some((request) => request.required) ||
-      this.requiredFailures.size ||
-      this.exhausted
-    )
-      return;
+      [...this.pending].some((request) => request.required);
+    if (reading || this.requiredFailures.size || this.exhausted) return;
     // AppHost can finish its handshake before the lazy UI module has loaded.
     // Pause only that idle gap: any real read resumes the same remaining budget.
-    if (!this.everReady && !this.readinessStarted && this.cycle) {
+    if (
+      !this.everReady &&
+      !this.readinessStarted &&
+      this.current &&
+      this.cycle
+    ) {
       if (
         Number.isFinite(this.cycle.deadline) &&
         this.now() < this.cycle.deadline
@@ -264,6 +264,8 @@ export class AppHostRecovery {
       return;
     }
     if (
+      !this.initialSettings ||
+      !this.initialStartup ||
       (this.requiresHistory() && this.stages.history?.state !== "completed") ||
       Object.values(this.stages).some((stage) => stage.state === "started") ||
       ["configuration", "requirements", "models"].some(

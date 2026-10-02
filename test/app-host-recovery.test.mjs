@@ -375,6 +375,11 @@ test("lazy asset download time does not consume the foreground configuration dea
       }),
   );
   const services = await env.coordinator.start();
+  // The lazy UI has not issued settings or startup reads yet. The completed
+  // transport handshake must not start an idle countdown to page failure.
+  t.mock.timers.tick(180_000);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.coordinator.failed, false);
   const read = services.settings.readAll();
   await settle();
   t.mock.timers.tick(10_000);
