@@ -9,7 +9,6 @@
 !src/**
 !test/**
 !.ci/smoke-container.mjs
-!.ci/wait-for-idle.cjs
 src/server/**/*.js
 src/server/**/*.map
 src/server/**/*.d.ts

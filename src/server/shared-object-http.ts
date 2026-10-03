@@ -26,6 +26,9 @@ export class SharedObjectHttp {
 
   capture(message: unknown): number {
     const body = Buffer.from(JSON.stringify(message));
+    // The native repository can publish the same snapshot to each scoped renderer.
+    // Reuse its revision so one tab's notification cannot invalidate another's read.
+    if (this.snapshot?.body.equals(body)) return this.snapshot.revision;
     const revision = ++this.revision;
     // Invalidate the previous identity even if a future Desktop exceeds bounds.
     this.snapshot = body.length <= MAX_BYTES ? { revision, body } : undefined;
@@ -34,7 +37,7 @@ export class SharedObjectHttp {
 
   async install(
     app: FastifyInstance,
-    invoke: (event: unknown) => unknown,
+    invoke: (event: unknown, clientId: string) => unknown,
   ): Promise<void> {
     await app.register(async (route) => {
       let active = 0;
@@ -137,7 +140,9 @@ export class SharedObjectHttp {
           let timer: ReturnType<typeof setTimeout> | undefined;
           try {
             const result = await Promise.race([
-              Promise.resolve().then(() => invoke(event)),
+              // Capture the live renderer synchronously after the identity check;
+              // a reused clientId must never redirect this write to a new socket.
+              Promise.resolve(invoke(event, req.query.clientId!)),
               new Promise((_, reject) => {
                 timer = setTimeout(() => reject(new Error("timeout")), 15_000);
               }),

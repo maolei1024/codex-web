@@ -83,6 +83,18 @@ liveness probe. Reconnection restores subscriptions and refreshes local and remo
 conversation state. Existing tabs need one refresh after a Web release to load its
 new bridge; the application does not force reloads while users are editing.
 
+Each authenticated WebSocket owns its native IPC sender targets, message queues
+and chunk acknowledgements while retaining Desktop's primary-window identity.
+Native replies go only to their requesting connection. Global notifications are
+prepared intact and independently chunked for each eligible recipient. Closing a
+connection releases its queues, ACK timers, subscriptions and pending read callers;
+late replies and acknowledgements cannot affect a replacement connection.
+Each delivered chunk waits at most 30 seconds for its matching transfer and sequence
+acknowledgement. Unrelated acknowledgements do not extend that deadline. A timeout
+closes only the affected connection, and the existing browser recovery reconnects
+it without restarting the Web service or interrupting other tabs. This deadline
+does not time out model work or replay writes.
+
 AppHost recovery replaces the native RPC session, service references and subscriptions
 for each connection generation. A closed channel sends the native termination signal,
 settles callers and ignores late replies. Initialization and explicitly listed reads
@@ -139,12 +151,15 @@ and publication. Authentication, permissions and model availability use their ac
 results. Settings reads are traced through receipt, dependency completion and reply.
 Browser diagnostics are available via `window.__ELECTRON_SHIM__.diagnostics()`;
 authenticated `/__backend/diagnostics` reports server channel counts and bounded
-startup events. Events contain methods, phases, durations and counts, never request
+startup events. Its `chunkedIpc` counters include sender targets, ordinary and critical
+queued messages, pending transfers, the longest current ACK wait and total ACK
+timeouts. Events contain methods, phases, durations and counts, never request
 arguments, messages, drafts, credentials or feature-assignment payloads.
 
 Tests exercise the pinned extracted RPC transports and request client, including
 timeouts, late replies, subscription restoration and concurrent tabs. The image smoke
-test performs a real AppHost handshake and settings read. Browser acceptance must
+test performs a real AppHost handshake and settings read, plus ordinary native global
+state reads from concurrent connections and after a disconnect. Browser acceptance must
 check actual history text, projects and required configuration; an input box or open
 WebSocket alone does not establish readiness. Cold asset transfer and large histories
 are measured separately from warm small-history reloads.
@@ -259,6 +274,9 @@ Its native amd64 and arm64 builds run `npm test` and a packaged runtime smoke
 check before publication. Woodpecker builds on `main` push/manual, publishes
 `docker.nexus.ixuni.win/codex/web:build-N`, and applies `k8s/codex-web.yaml`.
 Both architectures must pass before the combined image and `latest` are published.
+CI applies the `Recreate` update directly without querying the old instance for idle
+tasks; this can interrupt active cluster tasks. It retains the TCP startup, readiness
+and liveness probes and waits up to ten minutes for the Deployment rollout.
 The deployment uses a single replica on ml256 with a hostPath at
 `/srv/k3s-local/project-codex-web/codex-web`, mounted at `/data`. Before the first
 deployment, create this directory on ml256 with UID/GID 1000 and mode 0700:
@@ -271,6 +289,14 @@ The manifest requires the directory to exist and keeps `Recreate` updates and
 the ml256 node selector. Storage uses the host filesystem's available capacity;
 there is no PVC or 10 GiB volume quota. Back up this directory with the application
 stopped before moving the deployment to another host.
+
+The ml-vubuntu local user service activates a prepared runtime release only after a
+manual restart. Preparing artifacts or pushing source does not restart that service.
+After saving local work, activate the prepared release on ml-vubuntu with:
+
+```sh
+systemctl --user restart codex-web.service
+```
 
 The cluster deployment enables Node's `--use-env-proxy` and sends public HTTPS
 through the existing node-local `cluster-proxy-local.project-mihomo:27890` service.

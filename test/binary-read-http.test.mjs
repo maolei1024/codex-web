@@ -40,23 +40,25 @@ async function until(test) {
   }
   assert.fail("condition not reached");
 }
-async function server(t, native, timeout) {
+async function server(t, native, timeout, owner) {
   const app = Fastify(),
     transport = new BinaryReadHttp(timeout),
-    calls = [];
+    calls = [],
+    invocations = [];
   installAuthHook(app, "test-secret");
-  await transport.install(app, (event) => {
+  await transport.install(app, (event, clientId, requestOwner) => {
     calls.push(event);
-    return native?.(event, transport);
+    invocations.push({ event, clientId, owner: requestOwner });
+    return native?.(event, transport, clientId, requestOwner);
   });
-  transport.connect("tab");
+  transport.connect("tab", owner);
   t.after(() => {
     transport.disconnect("tab");
     return app.close();
   });
   const post = (payload = read(), opts = {}) =>
     app.inject({ method: "POST", url: endpoint, payload, headers, ...opts });
-  return { app, transport, calls, post };
+  return { app, transport, calls, invocations, post };
 }
 
 test("binary reads preserve native SSH request/result and use authenticated gzip HTTP, without capturing ordinary fetches", async (t) => {
@@ -128,8 +130,15 @@ test("binary HTTP forwards native permission errors and bounds URLs, input and o
 });
 
 test("timeouts and disconnects cancel exact native IDs, isolate tabs, and suppress late responses", async (t) => {
-  const { post, calls, transport } = await server(t, null, 40);
-  transport.connect("other-tab");
+  const ownerA = {},
+    ownerB = {};
+  const { post, calls, invocations, transport } = await server(
+    t,
+    null,
+    40,
+    ownerA,
+  );
+  transport.connect("other-tab", ownerB);
   t.after(() => transport.disconnect("other-tab"));
   const first = post().then((r) => r.json());
   const second = post(read(), {
@@ -153,7 +162,151 @@ test("timeouts and disconnects cancel exact native IDs, isolate tabs, and suppre
   assert.ok(
     calls.some((e) => e.type === "cancel-fetch" && e.requestId === b.requestId),
   );
+  for (const [event, owner, clientId] of [
+    [a, ownerA, "tab"],
+    [b, ownerB, "other-tab"],
+  ]) {
+    const cancelled = invocations.find(
+      (call) =>
+        call.event.type === "cancel-fetch" &&
+        call.event.requestId === event.requestId,
+    );
+    assert.equal(cancelled.owner, owner);
+    assert.equal(cancelled.clientId, clientId);
+  }
   assert.equal(transport.capture(envelope(response(a.requestId))), true);
+});
+
+test("binary response IDs require their connection owner and reserved late IDs never return to WebSocket", async (t) => {
+  const ownerA = {},
+    ownerB = {};
+  const { post, transport, invocations } = await server(
+    t,
+    null,
+    undefined,
+    ownerA,
+  );
+  transport.connect("other-tab", ownerB);
+  t.after(() => transport.disconnect("other-tab"));
+  const event = read();
+  let settledA = false,
+    settledB = false;
+  const first = post(event).then((result) => {
+    settledA = true;
+    return result;
+  });
+  const second = post(event, {
+    url: endpoint.replace("tab", "other-tab"),
+  }).then((result) => {
+    settledB = true;
+    return result;
+  });
+  await until(() => invocations.length === 2);
+  const a = invocations.find((call) => call.clientId === "tab"),
+    b = invocations.find((call) => call.clientId === "other-tab");
+  assert.equal(a.owner, ownerA);
+  assert.equal(b.owner, ownerB);
+  assert.notEqual(a.event.requestId, b.event.requestId);
+  assert.equal(
+    transport.capture(envelope(response(a.event.requestId)), ownerB),
+    true,
+  );
+  assert.equal(transport.capture(envelope(response(a.event.requestId))), true);
+  assert.equal(
+    transport.capture(envelope(response(b.event.requestId)), ownerA),
+    true,
+  );
+  assert.equal(
+    transport.capture(
+      envelope(response(`codex-web-binary:${randomUUID()}`)),
+      ownerA,
+    ),
+    true,
+  );
+  assert.equal(
+    transport.capture(envelope(response(event.requestId)), ownerA),
+    false,
+  );
+  await tick();
+  assert.equal(settledA, false);
+  assert.equal(settledB, false);
+
+  transport.capture(envelope(response(b.event.requestId, "b")), ownerB);
+  assert.deepEqual((await second).json(), response(event.requestId, "b"));
+  assert.equal(settledA, false);
+  transport.capture(envelope(response(a.event.requestId, "a")), ownerA);
+  assert.deepEqual((await first).json(), response(event.requestId, "a"));
+  assert.equal(
+    transport.capture(envelope(response(a.event.requestId)), ownerB),
+    true,
+  );
+});
+
+test("disconnect cancels synchronously using the retired owner and cannot settle a replacement with the same client ID", async (t) => {
+  const retired = {},
+    replacement = {},
+    peer = {};
+  const { post, transport, invocations } = await server(
+    t,
+    null,
+    undefined,
+    retired,
+  );
+  transport.connect("other-tab", peer);
+  t.after(() => transport.disconnect("other-tab"));
+  const event = read(),
+    old = post(event),
+    other = post(read(), { url: endpoint.replace("tab", "other-tab") });
+  await until(() => invocations.length === 2);
+  const oldRead = invocations.find((call) => call.clientId === "tab"),
+    peerRead = invocations.find((call) => call.clientId === "other-tab");
+  transport.disconnect("tab");
+  const cancel = invocations.find((call) => call.event.type === "cancel-fetch");
+  assert.ok(
+    cancel,
+    "native cancellation must start before connection teardown finishes",
+  );
+  assert.equal(cancel.clientId, "tab");
+  assert.equal(cancel.owner, retired);
+  assert.equal(cancel.event.requestId, oldRead.event.requestId);
+  transport.connect("tab", replacement);
+  assert.equal((await old).statusCode, 409);
+  let settled = false;
+  const current = post(event).then((result) => {
+    settled = true;
+    return result;
+  });
+  await until(() => invocations.some((call) => call.owner === replacement));
+  const currentRead = invocations.find((call) => call.owner === replacement);
+  assert.notEqual(currentRead.event.requestId, oldRead.event.requestId);
+  assert.equal(
+    transport.capture(envelope(response(oldRead.event.requestId)), retired),
+    true,
+  );
+  assert.equal(
+    transport.capture(envelope(response(oldRead.event.requestId)), replacement),
+    true,
+  );
+  assert.equal(
+    transport.capture(envelope(response(currentRead.event.requestId)), retired),
+    true,
+  );
+  await tick();
+  assert.equal(settled, false);
+  assert.equal(
+    invocations.filter((call) => call.event.type === "cancel-fetch").length,
+    1,
+  );
+  transport.capture(
+    envelope(response(currentRead.event.requestId, "new-owner")),
+    replacement,
+  );
+  transport.capture(envelope(response(peerRead.event.requestId, "peer")), peer);
+  assert.deepEqual(
+    (await current).json(),
+    response(event.requestId, "new-owner"),
+  );
+  assert.equal((await other).statusCode, 200);
 });
 
 test("concurrency limit releases capacity after native completion", async (t) => {

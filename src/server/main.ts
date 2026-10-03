@@ -31,6 +31,12 @@ import { installDownloadHooks } from "./downloads";
 import { installFeatureConfigRoute } from "./feature-config";
 import { SharedObjectHttp } from "./shared-object-http";
 import { BinaryReadHttp } from "./binary-read-http";
+import { getRendererParent } from "./electron/index";
+import {
+  rendererConnections,
+  type NativeRendererMessage,
+  type RendererConnection,
+} from "./renderer-connection";
 import {
   parsePositiveInteger,
   UploadLimitError,
@@ -177,6 +183,11 @@ class WebSocketMessagePort implements BridgedMessagePort {
     return this;
   }
 
+  off(event: string, listener: MessagePortListener): this {
+    this.listeners.get(event)?.delete(listener);
+    return this;
+  }
+
   postMessage(data: unknown): void {
     if (this.closed) {
       return;
@@ -269,13 +280,25 @@ function compareWorkspaceDirectoryEntries(
 
 type IpcMainBridgeState = {
   broadcastToRenderer?: (message: MainToRendererMessage) => void;
-  handleRendererInvoke?: (channel: string, args: unknown[]) => Promise<unknown>;
+  handleRendererInvoke?: (
+    channel: string,
+    args: unknown[],
+    sourceUrl?: string,
+    connection?: RendererConnection,
+  ) => Promise<unknown>;
   handleRendererPostMessage?: (
     channel: string,
     message: unknown,
     ports: BridgedMessagePort[],
+    sourceUrl?: string,
+    connection?: RendererConnection,
   ) => void;
-  handleRendererSend?: (channel: string, args: unknown[]) => void;
+  handleRendererSend?: (
+    channel: string,
+    args: unknown[],
+    sourceUrl?: string,
+    connection?: RendererConnection,
+  ) => void;
 };
 
 function printUsage(): void {
@@ -601,22 +624,40 @@ export async function startIpcBridgeServer(
   const sharedObjectHttp = new SharedObjectHttp();
   const binaryReadHttp = new BinaryReadHttp();
   const httpClients = new Map<WebSocket, string>();
+  const rendererClients = new Map<string, RendererConnection>();
+  const rendererSockets = new WeakMap<RendererConnection, WebSocket>();
+  const socketRenderers = new Map<WebSocket, RendererConnection>();
   const viewMessageChannel = "codex_desktop:message-from-view";
+  const snapshotRevision = Symbol("shared-object-revision");
+  type PreparedMessage = NativeRendererMessage & {
+    [snapshotRevision]?: number;
+  };
+  const invokeForClient = (
+    event: unknown,
+    clientId: string,
+    owner?: object,
+  ) => {
+    const connection =
+      (owner as RendererConnection | undefined) ??
+      rendererClients.get(clientId);
+    if (!connection || connection.closed)
+      throw new Error("Renderer connection closed");
+    if (!bridgeState.handleRendererInvoke)
+      throw new Error("Desktop bridge unavailable");
+    return bridgeState.handleRendererInvoke(
+      viewMessageChannel,
+      [event],
+      undefined,
+      connection,
+    );
+  };
 
   if (options.token !== null) {
     installAuthHook(app, options.token);
   }
   await installFeatureConfigRoute(app);
-  await sharedObjectHttp.install(app, (event) => {
-    if (!bridgeState.handleRendererInvoke)
-      throw new Error("Desktop bridge unavailable");
-    return bridgeState.handleRendererInvoke(viewMessageChannel, [event]);
-  });
-  await binaryReadHttp.install(app, (event) => {
-    if (!bridgeState.handleRendererInvoke)
-      throw new Error("Desktop bridge unavailable");
-    return bridgeState.handleRendererInvoke(viewMessageChannel, [event]);
-  });
+  await sharedObjectHttp.install(app, invokeForClient);
+  await binaryReadHttp.install(app, invokeForClient);
 
   await app.register(fastifyMultipart, {
     throwFileSizeLimit: true,
@@ -726,6 +767,7 @@ export async function startIpcBridgeServer(
         (sum, socket) => sum + socket.bufferedAmount,
         0,
       ),
+      chunkedIpc: rendererConnections.diagnostics(),
       startup: startupRecovery.diagnostics(),
     };
   });
@@ -788,38 +830,87 @@ export async function startIpcBridgeServer(
     });
   });
 
-  bridgeState.broadcastToRenderer = (message: MainToRendererMessage): void => {
-    if (binaryReadHttp.capture(message)) return;
+  const prepareGlobal = (
+    message: NativeRendererMessage,
+    owner?: RendererConnection,
+  ): PreparedMessage | null => {
+    const envelope = {
+      type: "ipc-main-event",
+      channel: message.channel,
+      args: [message.payload],
+    };
+    if (binaryReadHttp.capture(envelope, owner)) return null;
     const event =
-      message.type === "ipc-main-event" &&
       message.channel === "codex_desktop:message-for-view"
-        ? (message.args[0] as { type?: string; key?: unknown } | undefined)
+        ? (message.payload as { type?: string; key?: unknown } | undefined)
+        : undefined;
+    if (
+      event?.type === "shared-object-updated" &&
+      event.key === "statsig_evaluations"
+    )
+      return {
+        ...message,
+        [snapshotRevision]: sharedObjectHttp.capture(envelope),
+      };
+    return message;
+  };
+  const prepareConnection = (
+    connection: RendererConnection,
+    message: PreparedMessage,
+  ): NativeRendererMessage | null => {
+    const socket = rendererSockets.get(connection);
+    if (!socket || socket.readyState !== WebSocket.OPEN || connection.closed)
+      return null;
+    const event =
+      message.channel === "codex_desktop:message-for-view"
+        ? (message.payload as { type?: string; key?: unknown } | undefined)
         : undefined;
     const sharedKey =
       event?.type === "shared-object-updated" && typeof event.key === "string"
         ? event.key
         : null;
-    const revision =
-      sharedKey === "statsig_evaluations"
-        ? sharedObjectHttp.capture(message)
-        : null;
-    let payload: string | undefined;
-    for (const socket of sockets) {
-      if (
-        socket.readyState === WebSocket.OPEN &&
-        (sharedKey === null ||
-          sharedObjectSubscriptions.get(socket)?.has(sharedKey))
-      ) {
-        // Older tabs retain the original protocol until the user refreshes.
-        if (revision !== null && httpClients.has(socket)) {
-          socket.send(
-            JSON.stringify({ type: "shared-object-http-update", revision }),
-          );
-        } else {
-          // Do not serialize large snapshots when nobody is reading them.
-          socket.send((payload ??= JSON.stringify(message)));
-        }
-      }
+    if (
+      sharedKey !== null &&
+      !sharedObjectSubscriptions.get(socket)?.has(sharedKey)
+    )
+      return null;
+    const revision = message[snapshotRevision];
+    if (revision !== undefined && httpClients.has(socket)) {
+      socket.send(
+        JSON.stringify({ type: "shared-object-http-update", revision }),
+      );
+      return null;
+    }
+    return message;
+  };
+  rendererConnections.configure({ prepareGlobal, prepareConnection });
+  const deliverScoped = (
+    connection: RendererConnection,
+    channel: string,
+    args: unknown[],
+    prepared = false,
+  ) => {
+    const socket = rendererSockets.get(connection);
+    if (!socket || socket.readyState !== WebSocket.OPEN || connection.closed)
+      return;
+    // Native sender messages were prepared intact before encoding. Raw sender
+    // replies still pass through the HTTP bypass and subscription filters.
+    if (!prepared) {
+      const message = prepareGlobal({ channel, payload: args[0] }, connection);
+      if (!message || !prepareConnection(connection, message)) return;
+    }
+    socket.send(JSON.stringify({ type: "ipc-main-event", channel, args }));
+  };
+  bridgeState.broadcastToRenderer = (message: MainToRendererMessage): void => {
+    if (message.type !== "ipc-main-event") return;
+    const prepared = prepareGlobal({
+      channel: message.channel,
+      payload: message.args[0],
+    });
+    if (!prepared) return;
+    for (const [socket, connection] of socketRenderers) {
+      if (!prepareConnection(connection, prepared)) continue;
+      socket.send(JSON.stringify(message));
     }
   };
 
@@ -847,8 +938,6 @@ export async function startIpcBridgeServer(
         return;
       }
       httpClients.set(socket, clientId);
-      if (parameters.get("binaryReadHttp") === "1")
-        binaryReadHttp.connect(clientId);
     }
 
     // ws already closes protocol/size/decompression failures with the correct
@@ -856,6 +945,35 @@ export async function startIpcBridgeServer(
     // the Node process, and never log frame data or authentication material.
     const messagePorts = new Map<string, WebSocketMessagePort>();
     portCounts.set(socket, messagePorts);
+    let connection!: RendererConnection;
+    connection = rendererConnections.createConnection({
+      parent: getRendererParent,
+      deliver: (channel, args, prepared) =>
+        deliverScoped(connection, channel, args, prepared),
+      fail: () => {
+        if (socket.readyState === WebSocket.OPEN)
+          socket.close(1011, "Message acknowledgement timed out");
+      },
+      beforeClose: () => {
+        const clientId = httpClients.get(socket);
+        if (clientId) binaryReadHttp.disconnect(clientId);
+        if (clientId) sharedObjectHttp.disconnect(clientId);
+        if (clientId) rendererClients.delete(clientId);
+        httpClients.delete(socket);
+        for (const port of messagePorts.values()) port.disconnect();
+        messagePorts.clear();
+        subscriptions.clear();
+        socketRenderers.delete(socket);
+      },
+    });
+    socketRenderers.set(socket, connection);
+    rendererSockets.set(connection, socket);
+    const clientId = httpClients.get(socket);
+    if (clientId) {
+      rendererClients.set(clientId, connection);
+      if (parameters.get("binaryReadHttp") === "1")
+        binaryReadHttp.connect(clientId, connection);
+    }
     const dispatchPostMessage = (
       channel: string,
       message: unknown,
@@ -863,7 +981,7 @@ export async function startIpcBridgeServer(
     ): void => {
       const handler = bridgeState.handleRendererPostMessage;
       if (handler) {
-        handler(channel, message, ports);
+        handler(channel, message, ports, undefined, connection);
         return;
       }
 
@@ -880,33 +998,15 @@ export async function startIpcBridgeServer(
     });
 
     socket.on("close", () => {
-      const clientId = httpClients.get(socket);
-      if (clientId) sharedObjectHttp.disconnect(clientId);
-      if (clientId) binaryReadHttp.disconnect(clientId);
-      httpClients.delete(socket);
+      connection.close();
       sockets.delete(socket);
       portCounts.delete(socket);
       missedPings.delete(socket);
       sharedObjectSubscriptions.delete(socket);
-      for (const [key, count] of subscriptions) {
-        for (let i = 0; i < count; i++) {
-          void Promise.resolve()
-            .then(() =>
-              bridgeState.handleRendererInvoke?.(viewMessageChannel, [
-                { type: "shared-object-unsubscribe", key },
-              ]),
-            )
-            .catch(() => {});
-        }
-      }
-      subscriptions.clear();
-      for (const port of messagePorts.values()) {
-        port.disconnect();
-      }
-      messagePorts.clear();
     });
 
     socket.on("message", (rawData) => {
+      if (connection.closed) return;
       let message: RendererToMainMessage;
       try {
         message = JSON.parse(String(rawData)) as RendererToMainMessage;
@@ -935,7 +1035,12 @@ export async function startIpcBridgeServer(
           return;
         }
         sanitizeOutboundMcpRequestArgs(message.args);
-        bridgeState.handleRendererSend?.(message.channel, message.args);
+        bridgeState.handleRendererSend?.(
+          message.channel,
+          message.args,
+          undefined,
+          connection,
+        );
         return;
       }
 
@@ -1035,7 +1140,12 @@ export async function startIpcBridgeServer(
         Promise.resolve(
           !forward
             ? null
-            : (bridgeState.handleRendererInvoke?.(channel, args) ??
+            : (bridgeState.handleRendererInvoke?.(
+                channel,
+                args,
+                undefined,
+                connection,
+              ) ??
                 Promise.reject(
                   new Error(
                     `[ipc-bridge] no ipcMain.handle for channel ${channel}`,
@@ -1084,6 +1194,7 @@ export async function startIpcBridgeServer(
   app.addHook("onClose", async () => {
     clearInterval(pingInterval);
     for (const socket of sockets) {
+      socketRenderers.get(socket)?.close();
       socket.terminate();
     }
     sockets.clear();

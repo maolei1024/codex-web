@@ -1,6 +1,10 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { NetRequest } from "./net-request";
+import {
+  rendererConnections,
+  type RendererConnection,
+} from "../renderer-connection";
 
 type StubFunction = (...args: unknown[]) => unknown;
 type StubListener = (...args: unknown[]) => void;
@@ -8,6 +12,7 @@ type StubMessagePort = {
   isClosed?: () => boolean;
   close: () => void;
   on: (event: string, listener: StubListener) => unknown;
+  off?: (event: string, listener: StubListener) => unknown;
   postMessage: (message: unknown) => void;
   start: () => void;
 };
@@ -46,17 +51,20 @@ type IpcMainBridgeState = {
     channel: string,
     args: unknown[],
     sourceUrl?: string,
+    connection?: RendererConnection,
   ) => Promise<unknown>;
   handleRendererPostMessage?: (
     channel: string,
     message: unknown,
     ports: StubMessagePort[],
     sourceUrl?: string,
+    connection?: RendererConnection,
   ) => void;
   handleRendererSend?: (
     channel: string,
     args: unknown[],
     sourceUrl?: string,
+    connection?: RendererConnection,
   ) => void;
 };
 
@@ -197,11 +205,18 @@ const rendererWebContents: StubWebContents = {
 };
 
 let appHostSessionSequence = 0;
-function createIpcMainEvent(ports: StubMessagePort[] = []): IpcMainEvent {
-  const originalSender =
+export function getRendererParent(): StubWebContents {
+  return (
     (BrowserWindow.fromWebContents(rendererWebContents)
       ?.webContents as unknown as StubWebContents | undefined) ??
-    rendererWebContents;
+    rendererWebContents
+  );
+}
+function createIpcMainEvent(
+  ports: StubMessagePort[] = [],
+  connection?: RendererConnection,
+): IpcMainEvent {
+  const originalSender = connection?.sender ?? getRendererParent();
   // Each AppHost has its own lifetime while retaining the native primary-window
   // identity. Destroying one browser channel must not destroy the shared window.
   const port = ports[0];
@@ -216,6 +231,10 @@ function createIpcMainEvent(ports: StubMessagePort[] = []): IpcMainEvent {
           if (key === "__codexWebSessionId") return sessionId;
           if (key === "isDestroyed")
             return () => closed || target.isDestroyed();
+          if (key === "send")
+            return (channel: string, ...args: unknown[]) => {
+              if (!closed) target.send(channel, ...args);
+            };
           if (key === "once" || key === "on")
             return (event: string, listener: StubListener) => {
               if (event === "destroyed") {
@@ -236,6 +255,7 @@ function createIpcMainEvent(ports: StubMessagePort[] = []): IpcMainEvent {
         },
       })
     : originalSender;
+  if (connection && port) rendererConnections.bindOwner(sender, connection);
   port?.on("close", () => {
     closed = true;
     for (const listener of [...listeners]) {
@@ -253,11 +273,7 @@ function createIpcMainEvent(ports: StubMessagePort[] = []): IpcMainEvent {
     senderFrame: sender.mainFrame,
     ports,
     reply: (channel: string, ...args: unknown[]): void => {
-      getIpcMainBridgeState().broadcastToRenderer?.({
-        type: "ipc-main-event",
-        channel,
-        args,
-      });
+      sender.send(channel, ...args);
     },
   };
 
@@ -282,7 +298,12 @@ function createIpcMainStub(): {
 
   const pendingPostMessages = new Map<
     string,
-    Array<{ message: unknown; ports: StubMessagePort[] }>
+    Array<{
+      message: unknown;
+      ports: StubMessagePort[];
+      connection?: RendererConnection;
+      cleanup?: () => void;
+    }>
   >();
   const registeredPostMessageChannels = new Set<string>();
 
@@ -290,27 +311,43 @@ function createIpcMainStub(): {
     channel: string,
     message: unknown,
     ports: StubMessagePort[],
+    _sourceUrl?: string,
+    connection?: RendererConnection,
   ): void => {
-    if (ports.some((port) => port.isClosed?.())) return;
+    if (connection?.closed || ports.some((port) => port.isClosed?.())) return;
     if (registeredPostMessageChannels.has(channel)) {
-      emitter.emit(channel, createIpcMainEvent(ports), message);
+      emitter.emit(channel, createIpcMainEvent(ports, connection), message);
       return;
     }
     const pending = pendingPostMessages.get(channel) ?? [];
-    pending.push({ message, ports });
+    const entry: (typeof pending)[number] = { message, ports, connection };
+    entry.cleanup = () => {
+      connection?.sender.off("destroyed", entry.cleanup!);
+      for (const port of ports) port.off?.("close", entry.cleanup!);
+      const queued = pendingPostMessages.get(channel);
+      const index = queued?.indexOf(entry) ?? -1;
+      if (index >= 0) queued!.splice(index, 1);
+      if (queued?.length === 0) pendingPostMessages.delete(channel);
+    };
+    pending.push(entry);
     pendingPostMessages.set(channel, pending);
+    connection?.sender.once("destroyed", entry.cleanup);
+    for (const port of ports) port.on("close", entry.cleanup);
   };
 
   bridgeState.handleRendererInvoke = async (
     channel: string,
     args: unknown[],
+    _sourceUrl?: string,
+    connection?: RendererConnection,
   ): Promise<unknown> => {
+    if (connection?.closed) throw new Error("Renderer connection closed");
     const handler = handlers.get(channel);
     if (!handler) {
       // The Web preload cannot perform Electron's synchronous initial read.
       // Expose only this read over authenticated IPC, before React mounts.
       if (channel === "codex_desktop:get-shared-object-snapshot") {
-        const event = createIpcMainEvent();
+        const event = createIpcMainEvent([], connection);
         emitter.emit(channel, event, ...args);
         if (event.returnValue == null)
           throw new Error("Desktop shared state is not ready");
@@ -320,7 +357,7 @@ function createIpcMainStub(): {
       }
       throw new Error(`[electron-main-stub] No ipcMain.handle for ${channel}`);
     }
-    const event = createIpcMainEvent();
+    const event = createIpcMainEvent([], connection);
     return await Promise.resolve(handler(event, ...args));
   };
 
@@ -328,8 +365,10 @@ function createIpcMainStub(): {
     channel: string,
     args: unknown[],
     sourceUrl?: string,
+    connection?: RendererConnection,
   ): void => {
-    const event = createIpcMainEvent();
+    if (connection?.closed) return;
+    const event = createIpcMainEvent([], connection);
     emitter.emit(channel, event, ...args);
   };
 
@@ -340,9 +379,11 @@ function createIpcMainStub(): {
       const pending = pendingPostMessages.get(channel);
       if (pending) {
         pendingPostMessages.delete(channel);
-        for (const { message, ports } of pending) {
-          if (ports.some((port) => port.isClosed?.())) continue;
-          emitter.emit(channel, createIpcMainEvent(ports), message);
+        for (const { message, ports, connection, cleanup } of pending) {
+          cleanup?.();
+          if (connection?.closed || ports.some((port) => port.isClosed?.()))
+            continue;
+          emitter.emit(channel, createIpcMainEvent(ports, connection), message);
         }
       }
       return result;

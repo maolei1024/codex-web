@@ -10,18 +10,19 @@ const MAX_BYTES = 32 * 1024 * 1024;
 type Event = Record<string, unknown>;
 type Pending = {
   client: object;
+  owner?: object;
   finish: (event: Event, cancel?: boolean) => void;
 };
 
 /** Keep native local/SSH reads and permission checks, but carry bytes over HTTP. */
 export class BinaryReadHttp {
-  private clients = new Map<string, object>();
+  private clients = new Map<string, { owner?: object }>();
   private pending = new Map<string, Pending>();
 
   constructor(private readonly timeoutMs = 60_000) {}
 
-  connect(clientId: string): void {
-    this.clients.set(clientId, {});
+  connect(clientId: string, owner?: object): void {
+    this.clients.set(clientId, { owner });
   }
 
   disconnect(clientId: string): void {
@@ -33,7 +34,7 @@ export class BinaryReadHttp {
     }
   }
 
-  capture(message: unknown): boolean {
+  capture(message: unknown, owner?: object): boolean {
     const envelope = message as {
       type?: string;
       channel?: string;
@@ -50,7 +51,8 @@ export class BinaryReadHttp {
       return false;
     // IDs belong only to this transport. Late/cancelled results must not leak
     // into other tabs or return to the control WebSocket.
-    this.pending.get(event.requestId)?.finish(event);
+    const pending = this.pending.get(event.requestId);
+    if (pending && pending.owner === owner) pending.finish(event);
     return true;
   }
 
@@ -65,7 +67,7 @@ export class BinaryReadHttp {
 
   async install(
     app: FastifyInstance,
-    invoke: (event: Event) => unknown,
+    invoke: (event: Event, clientId: string, owner?: object) => unknown,
   ): Promise<void> {
     await app.register(async (route) => {
       let active = 0;
@@ -115,9 +117,17 @@ export class BinaryReadHttp {
               clearTimeout(timer);
               this.pending.delete(requestId);
               if (abort) {
-                void Promise.resolve()
-                  .then(() => invoke({ type: "cancel-fetch", requestId }))
-                  .catch(() => {});
+                try {
+                  void Promise.resolve(
+                    invoke(
+                      { type: "cancel-fetch", requestId },
+                      clientId,
+                      client.owner,
+                    ),
+                  ).catch(() => {});
+                } catch {
+                  /* Disconnect cleanup must settle the HTTP caller. */
+                }
               }
               resolve({ ...response, requestId: event.requestId });
             };
@@ -126,13 +136,22 @@ export class BinaryReadHttp {
               this.timeoutMs,
             );
             cancel = () => finish(this.failure("File read cancelled"), true);
-            this.pending.set(requestId, { client, finish });
+            this.pending.set(requestId, {
+              client,
+              owner: client.owner,
+              finish,
+            });
             req.raw.once("aborted", cancel);
             reply.raw.once("close", cancel);
             // Register before dispatch: native handlers may reply synchronously.
             void Promise.resolve()
               .then(() => {
-                if (!done) return invoke({ ...event, requestId });
+                if (!done)
+                  return invoke(
+                    { ...event, requestId },
+                    clientId,
+                    client.owner,
+                  );
               })
               .catch(() =>
                 finish(this.failure("Native file read failed"), true),

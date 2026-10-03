@@ -19,9 +19,6 @@ steps:
       - umask 077
       - printf '%s' "$${K8S_KUBECONFIG}" > /tmp/kubeconfig
       - export KUBECONFIG=/tmp/kubeconfig
-      # A build may finish while a user is working. Wait again at the actual
-      # replacement point; failure to read activity must block deployment.
-      - kubectl -n project-codex-web exec -i deployment/codex-web -- node < .ci/wait-for-idle.cjs
       - kubectl apply --validate=false --openapi-patch=false -f k8s/codex-web.yaml
       - kubectl -n project-codex-web rollout status deployment/codex-web --timeout=10m
     environment:

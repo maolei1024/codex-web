@@ -103,6 +103,90 @@ test("bulk snapshots require authentication and a live subscription; gzip preser
   assert.equal((await app.inject({ url, headers })).statusCode, 409);
 });
 
+test("identical native publications share a revision across tabs without invalidating either snapshot read", async (t) => {
+  const { app, transport } = await server(t);
+  transport.connect("a", () => true);
+  transport.connect("b", () => true);
+  const value = {
+    identity: { accountId: "account-a", userId: "user-a" },
+    executionValues: { unifiedProjects: false },
+    evaluations: { modelAccess: "restricted" },
+  };
+  const revision = transport.capture(update(value));
+  assert.equal(transport.capture(structuredClone(update(value))), revision);
+  for (const clientId of ["a", "b"]) {
+    const result = await app.inject({
+      url: `${endpoint}?clientId=${clientId}&revision=${revision}`,
+      headers: { ...headers, "accept-encoding": "gzip" },
+    });
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.headers["x-codex-shared-revision"], String(revision));
+    assert.deepEqual(JSON.parse(gunzipSync(result.rawPayload)), update(value));
+  }
+  assert.equal(transport.capture(update(value)), revision);
+});
+
+test("identity or permissions changes invalidate prior revisions and retain the exact current native values", async (t) => {
+  const { app, transport } = await server(t);
+  transport.connect("tab", () => true);
+  const value = {
+    identity: { accountId: "account-a", userId: "user-a" },
+    executionValues: { unifiedProjects: false },
+    evaluations: { modelAccess: "restricted" },
+  };
+  let revision = transport.capture(update(value));
+  for (const current of [
+    { ...value, identity: { accountId: "account-b", userId: "user-b" } },
+    {
+      ...value,
+      identity: { accountId: "account-b", userId: "user-b" },
+      executionValues: { unifiedProjects: true },
+      evaluations: { modelAccess: "allowed" },
+    },
+    null,
+  ]) {
+    const next = transport.capture(update(current));
+    assert.ok(next > revision);
+    assert.equal(transport.capture(structuredClone(update(current))), next);
+    const old = await app.inject({
+      url: `${endpoint}?clientId=tab&revision=${revision}`,
+      headers,
+    });
+    assert.equal(old.statusCode, 409);
+    assert.equal(old.headers["x-codex-shared-revision"], String(next));
+    const result = await app.inject({
+      url: `${endpoint}?clientId=tab&revision=${next}`,
+      headers,
+    });
+    assert.equal(result.statusCode, 200);
+    assert.deepEqual(result.json(), update(current));
+    revision = next;
+  }
+});
+
+test("an oversized publication invalidates the prior snapshot and a later identical small value gets a fresh revision", async (t) => {
+  const { app, transport } = await server(t);
+  transport.connect("tab", () => true);
+  const value = { identity: "current", permission: false },
+    previous = transport.capture(update(value)),
+    oversized = transport.capture(update("x".repeat(8 * 1024 * 1024)));
+  assert.ok(oversized > previous);
+  const get = (revision) =>
+    app.inject({
+      url: `${endpoint}?clientId=tab&revision=${revision}`,
+      headers,
+    });
+  const stale = await get(previous);
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.headers["x-codex-shared-revision"], String(oversized));
+  assert.equal((await get(oversized)).statusCode, 413);
+  const restored = transport.capture(update(value));
+  assert.ok(restored > oversized);
+  assert.equal(transport.capture(structuredClone(update(value))), restored);
+  assert.equal((await get(previous)).statusCode, 409);
+  assert.deepEqual((await get(restored)).json(), update(value));
+});
+
 test("bulk publication calls the native handler once and rejects other keys, malformed data, oversized gzip and closed sessions", async (t) => {
   const calls = [];
   const { app, transport } = await server(t, (event) => {

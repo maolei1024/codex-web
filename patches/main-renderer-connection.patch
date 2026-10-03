@@ -1,0 +1,77 @@
+--- a/.vite/build/main-C3nRcJ3D.js
++++ b/.vite/build/main-C3nRcJ3D.js
+@@ -13628,7 +13628,7 @@
+         ...e,
+         deliver: (e, t, n) => {
+-          e.send(t.channel, n ?? t.payload);
++          globalThis.__CODEX_WEB_RENDERERS__.deliver(this.sender, e, t, n);
+         },
+         getPayload: (e) => e.payload,
+         isAvailable: (e) => !e.isDestroyed(),
+         isLoading: (e) => e.isLoading?.() === !0,
+@@ -13652,20 +13652,19 @@
+       });
+     }
+     send(e, t, n) {
+-      e.isDestroyed() || this.sender.send(e, { channel: t, payload: n });
++      globalThis.__CODEX_WEB_RENDERERS__.send(this.sender, e, { channel: t, payload: n }, "normal");
+     }
+     sendInline(e, t, n) {
+-      e.isDestroyed() || this.sender.sendInline(e, { channel: t, payload: n });
++      globalThis.__CODEX_WEB_RENDERERS__.send(this.sender, e, { channel: t, payload: n }, "inline");
+     }
+     sendCritical(e, t, n) {
+-      e.isDestroyed() ||
+-        this.sender.sendCritical(e, { channel: t, payload: n });
++      globalThis.__CODEX_WEB_RENDERERS__.send(this.sender, e, { channel: t, payload: n }, "critical");
+     }
+     sendInlineMessageForView(e, t) {
+       this.sendInline(e, m.Q, t);
+     }
+     acknowledge(e, t, n) {
+-      this.sender.acknowledge(e, t, n);
++      globalThis.__CODEX_WEB_RENDERERS__.acknowledge(this.sender, e, t, n);
+     }
+   },
+   Fie = n.F([n.N(), n.D().int()]);
+@@ -33628,25 +33627,30 @@
+       return this.options.appServerConnectionRegistry.getConnection(e);
+     }
+     getAbortControllerKey(e, t) {
+-      return `${e.id}:${t}`;
++      return globalThis.__CODEX_WEB_RENDERERS__.requestKey(e, t);
+     }
+     async handleRequest(e, t) {
+       if (t.url === Hb) {
+         await this.handleDictationStreamConnectInfoRequest(e, t);
+         return;
+       }
+       let n = new AbortController(),
+         r = this.getAbortControllerKey(e, t.requestId);
++      this.abortControllers.set(r, n);
++      const stopRead = globalThis.__CODEX_WEB_RENDERERS__.trackRead(
++        e, t.url, n, () => this.abortControllers.delete(r));
+-      if ((this.abortControllers.set(r, n), this.isVsCodeFetchRequest(t.url))) {
++      if (this.isVsCodeFetchRequest(t.url)) {
+         try {
+           await this.handleVsCodeFetchRequest(e, t, n.signal);
+         } finally {
+           this.abortControllers.delete(r);
++          stopRead();
+         }
+         return;
+       }
+       throw (
+         this.abortControllers.delete(r),
++        stopRead(),
+         Error(`HTTP requests must use the HTTP fetch service.`)
+       );
+     }
+@@ -103654,6 +103658,7 @@
+           (this.sharedObjectSubscriberOrigins.add(e),
+           e.once(`destroyed`, () => {
++            this.sharedObjectSubscriberOrigins.delete(e);
+             for (let [t, n] of this.sharedObjectSubscribers)
+               (n.delete(e),
+                 n.size === 0 && this.sharedObjectSubscribers.delete(t));
+           }));

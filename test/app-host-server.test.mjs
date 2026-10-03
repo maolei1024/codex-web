@@ -9,7 +9,11 @@ const {
   startIpcBridgeServer,
   parseServerArgs,
 } = require("../src/server/main.js");
-const { ipcMain } = require("../src/server/electron/index.js");
+const {
+  ipcMain,
+  getRendererParent,
+} = require("../src/server/electron/index.js");
+const { rendererConnections } = require("../src/server/renderer-connection.js");
 const rpc = await nativeAppHostRuntime();
 
 test("initial shared state uses the native snapshot handler without exposing other synchronous IPC", async () => {
@@ -63,6 +67,90 @@ test("channel-scoped renderer lifetimes preserve primary identity and isolate de
   assert.equal(events[1].sender.isDestroyed(), false);
   b.emit("close");
   assert.equal(second, 1);
+});
+
+test("queued AppHost ports release listeners on port or connection close before channel registration", (t) => {
+  const channel = "test-app-host-pending-port-cleanup",
+    bridge = globalThis.__codexElectronIpcBridge,
+    received = [],
+    connections = [];
+  const createConnection = () => {
+    const connection = rendererConnections.createConnection({
+      parent: getRendererParent,
+      deliver: () => assert.fail("queued ports must not broadcast replies"),
+      fail: () => assert.fail("queued ports have no native ACK deadline"),
+    });
+    connections.push(connection);
+    return connection;
+  };
+  const createPort = () => {
+    let closed = false;
+    return Object.assign(new EventEmitter(), {
+      isClosed: () => closed,
+      close() {
+        if (closed) return;
+        closed = true;
+        this.emit("close");
+      },
+    });
+  };
+  const listener = (event, message) => received.push({ event, message });
+  t.after(() => {
+    ipcMain.off(channel, listener);
+    for (const connection of connections) connection.close();
+  });
+  const live = createConnection();
+  for (let i = 0; i < 16; i++) {
+    const port = createPort();
+    bridge.handleRendererPostMessage(
+      channel,
+      { retired: i },
+      [port],
+      undefined,
+      live,
+    );
+    assert.equal(port.listenerCount("close"), 1);
+    port.close();
+    assert.equal(port.listenerCount("close"), 0);
+    assert.equal(live.closed, false);
+  }
+  const departed = createConnection(),
+    departedPort = createPort();
+  bridge.handleRendererPostMessage(
+    channel,
+    { departed: true },
+    [departedPort],
+    undefined,
+    departed,
+  );
+  assert.equal(departedPort.listenerCount("close"), 1);
+  departed.close();
+  assert.equal(departedPort.listenerCount("close"), 0);
+  const currentPort = createPort();
+  bridge.handleRendererPostMessage(
+    channel,
+    { current: true },
+    [currentPort],
+    undefined,
+    live,
+  );
+  assert.equal(currentPort.listenerCount("close"), 1);
+  ipcMain.on(channel, listener);
+  assert.deepEqual(
+    received.map(({ message }) => message),
+    [{ current: true }],
+  );
+  assert.equal(rendererConnections.ownerOf(received[0].event.sender), live);
+  assert.equal(
+    currentPort.listenerCount("close"),
+    1,
+    "only the active AppHost lifecycle listener remains",
+  );
+  let destroyed = 0;
+  received[0].event.sender.once("destroyed", () => destroyed++);
+  currentPort.close();
+  assert.equal(destroyed, 1);
+  assert.equal(live.closed, false);
 });
 
 test("two real RPC clients with identical port IDs remain isolated through socket close", async () => {

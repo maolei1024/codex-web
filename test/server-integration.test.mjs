@@ -232,21 +232,20 @@ test("native binary HTTP bypasses both WebSockets and cancels an aborted read", 
   const previous = bridge.handleRendererInvoke;
   const calls = [];
   let hold = false;
-  bridge.handleRendererInvoke = async (_channel, [event]) => {
+  bridge.handleRendererInvoke = async (
+    _channel,
+    [event],
+    _source,
+    connection,
+  ) => {
     calls.push(event);
     if (event.type === "fetch" && !hold)
-      bridge.broadcastToRenderer({
-        type: "ipc-main-event",
-        channel: "codex_desktop:message-for-view",
-        args: [
-          {
-            type: "fetch-response",
-            responseType: "success",
-            requestId: event.requestId,
-            status: 200,
-            bodyJsonString: JSON.stringify({ base64: "x".repeat(1500000) }),
-          },
-        ],
+      connection.sender.send("codex_desktop:message-for-view", {
+        type: "fetch-response",
+        responseType: "success",
+        requestId: event.requestId,
+        status: 200,
+        bodyJsonString: JSON.stringify({ base64: "x".repeat(1500000) }),
       });
     return null;
   };
@@ -317,6 +316,7 @@ test("shared objects stay within subscribing tabs and disconnect releases refere
   const bridge = (globalThis.__codexElectronIpcBridge ??= {});
   const previousHandler = bridge.handleRendererInvoke;
   const refs = new Map();
+  const owners = new Map();
   const received = new Map();
   const clients = new Set();
   const channel = "codex_desktop:message-from-view";
@@ -327,11 +327,30 @@ test("shared objects stay within subscribing tabs and disconnect releases refere
       channel: eventChannel,
       args: [{ type: "shared-object-updated", key, value }],
     });
-  bridge.handleRendererInvoke = async (_channel, [event]) => {
+  bridge.handleRendererInvoke = async (
+    _channel,
+    [event],
+    _source,
+    connection,
+  ) => {
+    let owned = owners.get(connection);
+    if (!owned) {
+      owned = new Map();
+      owners.set(connection, owned);
+      connection.sender.once("destroyed", () => {
+        for (const [key, count] of owned)
+          refs.set(key, (refs.get(key) ?? 0) - count);
+        owners.delete(connection);
+      });
+    }
     if (event.type === "shared-object-subscribe") {
+      owned.set(event.key, (owned.get(event.key) ?? 0) + 1);
       refs.set(event.key, (refs.get(event.key) ?? 0) + 1);
       update(event.key, "initial snapshot");
     } else if (event.type === "shared-object-unsubscribe") {
+      const count = (owned.get(event.key) ?? 0) - 1;
+      if (count > 0) owned.set(event.key, count);
+      else owned.delete(event.key);
       refs.set(event.key, (refs.get(event.key) ?? 0) - 1);
     } else if (event.type === "shared-object-set") {
       update(event.key, event.value);

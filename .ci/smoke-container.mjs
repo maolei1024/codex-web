@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { once } from "node:events";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { EventEmitter, once } from "node:events";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
 import { initializeContainer } from "/app/scripts/container-init.mjs";
 import { nativeAppHostRuntime } from "./desktop-app-host-harness.mjs";
+import { nativeChunkedRuntime } from "./desktop-chunked-message-harness.mjs";
 
 const require = createRequire("/app/package.json");
 const release = require("/app/local-build.json");
@@ -42,6 +43,7 @@ assert.equal(db.prepare("select 1 as n").get().n, 1);
 db.close();
 assert.equal(typeof require("@parcel/watcher").subscribe, "function");
 const WebSocket = require("ws");
+const { Reassembler } = await nativeChunkedRuntime();
 const root = await mkdtemp(`${tmpdir()}/codex-web-smoke-`);
 const env = {
   ...process.env,
@@ -54,6 +56,143 @@ const env = {
   CODEX_WEB_TOKEN: "container-smoke-only",
 };
 await initializeContainer(env);
+const workspaceRoots = [`${env.CODEX_WEB_DOCUMENTS_DIR}/ChatGPT`];
+await writeFile(
+  `${env.CODEX_HOME}/.codex-global-state.json`,
+  JSON.stringify({ "electron-saved-workspace-roots": workspaceRoots }),
+);
+const clients = new Set();
+async function connectClient(headers) {
+  const socket = new WebSocket("ws://127.0.0.1:18214/__backend/ipc", {
+    headers,
+  });
+  const events = new EventEmitter();
+  const receiver = new Reassembler();
+  const client = { socket, events };
+  clients.add(client);
+  socket.on("error", (error) => events.emit("failure", error));
+  socket.on("close", () => {
+    clients.delete(client);
+    events.emit("closed");
+  });
+  socket.on("message", (raw) => {
+    try {
+      let envelope = JSON.parse(raw);
+      if (
+        envelope.type === "ipc-main-event" &&
+        envelope.channel === "codex_desktop:message-for-view"
+      ) {
+        const received = receiver.receive(envelope.args?.[0]);
+        if (received.acknowledgement && socket.readyState === WebSocket.OPEN) {
+          socket.send(
+            JSON.stringify({
+              type: "ipc-renderer-send",
+              channel: "codex_desktop:chunked-message-ack",
+              args: [
+                received.acknowledgement.transferId,
+                received.acknowledgement.sequence,
+              ],
+            }),
+          );
+        }
+        if (received.type === "pending") return;
+        envelope = { ...envelope, args: [received.message] };
+      }
+      events.emit("message", envelope);
+    } catch (error) {
+      events.emit("failure", error);
+      socket.terminate();
+    }
+  });
+  let timer;
+  try {
+    await Promise.race([
+      once(socket, "open"),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("WebSocket timeout")), 10_000);
+      }),
+    ]);
+    return client;
+  } catch (error) {
+    socket.terminate();
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function closeClient(client) {
+  if (client.socket.readyState === WebSocket.CLOSED) return;
+  const closed = once(client.socket, "close");
+  client.socket.close();
+  const timer = setTimeout(() => client.socket.terminate(), 1000);
+  try {
+    await closed;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function readGlobalState(client, label) {
+  return new Promise((resolve, reject) => {
+    const requestId = `smoke-global-state-${label}`;
+    const invokeId = `${requestId}-invoke`;
+    const finish = (error) => {
+      clearTimeout(timer);
+      client.events.off("message", received);
+      client.events.off("failure", failed);
+      client.events.off("closed", disconnected);
+      error ? reject(error) : resolve();
+    };
+    const failed = (error) => finish(error);
+    const disconnected = () =>
+      finish(new Error("Global state client disconnected"));
+    const received = (envelope) => {
+      if (
+        envelope.type === "ipc-renderer-invoke-result" &&
+        envelope.requestId === invokeId &&
+        !envelope.ok
+      ) {
+        finish(new Error(envelope.errorMessage));
+        return;
+      }
+      const message = envelope.type === "ipc-main-event" && envelope.args?.[0];
+      if (message?.type !== "fetch-response" || message.requestId !== requestId)
+        return;
+      try {
+        assert.equal(message.responseType, "success");
+        assert.equal(message.status, 200);
+        assert.deepEqual(
+          JSON.parse(message.bodyJsonString).value,
+          workspaceRoots,
+        );
+        finish();
+      } catch (error) {
+        finish(error);
+      }
+    };
+    const timer = setTimeout(
+      () => finish(new Error(`Native global state timeout: ${label}`)),
+      15_000,
+    );
+    client.events.on("message", received);
+    client.events.on("failure", failed);
+    client.events.on("closed", disconnected);
+    client.socket.send(
+      JSON.stringify({
+        type: "ipc-renderer-invoke",
+        requestId: invokeId,
+        channel: "codex_desktop:message-from-view",
+        args: [
+          {
+            type: "fetch",
+            requestId,
+            url: "vscode://codex/get-global-state",
+            body: JSON.stringify({ key: "electron-saved-workspace-roots" }),
+          },
+        ],
+      }),
+    );
+  });
+}
 const child = spawn(
   process.execPath,
   ["/app/src/server/main.js", "--host", "127.0.0.1", "--port", "18214"],
@@ -95,15 +234,8 @@ try {
   assert.equal(response?.status, 401);
   const headers = { Cookie: "codex_web_token=container-smoke-only" };
   assert.equal((await fetch(url, { headers })).status, 200);
-  const socket = new WebSocket("ws://127.0.0.1:18214/__backend/ipc", {
-    headers,
-  });
-  await Promise.race([
-    once(socket, "open"),
-    delay(10_000).then(() => {
-      throw new Error("WebSocket timeout");
-    }),
-  ]);
+  let client = await connectClient(headers);
+  let socket = client.socket;
   await new Promise((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error("Desktop app-server initialization timeout")),
@@ -130,8 +262,7 @@ try {
           }),
         );
     };
-    socket.on("message", (raw) => {
-      const envelope = JSON.parse(raw);
+    client.events.on("message", (envelope) => {
       if (
         envelope.type === "ipc-renderer-invoke-result" &&
         envelope.requestId === "smoke-invoke" &&
@@ -165,6 +296,20 @@ try {
     });
     sendRequest();
   });
+  // Ordinary Desktop fetches must work on separate windows and after replacing
+  // a connection; the direct shared-object snapshot cannot cover this queue.
+  const second = await connectClient(headers);
+  await Promise.all([
+    readGlobalState(client, "a"),
+    readGlobalState(second, "b"),
+  ]);
+  await closeClient(client);
+  client = await connectClient(headers);
+  socket = client.socket;
+  await Promise.all([
+    readGlobalState(client, "a-reconnected"),
+    readGlobalState(second, "b-after-a-close"),
+  ]);
   // Exercise the same extracted RPC engine as Chrome, not merely IPC thread/list.
   const rpc = await nativeAppHostRuntime();
   const { port1, port2 } = new MessageChannel();
@@ -179,14 +324,13 @@ try {
         }),
       );
   });
-  const route = (raw) => {
-    const envelope = JSON.parse(raw);
+  const route = (envelope) => {
     if (envelope.portId !== "smoke-host") return;
     if (envelope.type === "message-port-message")
       port2.postMessage(envelope.data);
     if (envelope.type === "message-port-close") port2.postMessage(null);
   };
-  socket.on("message", route);
+  client.events.on("message", route);
   const view = new (class extends rpc.Target {
     get services() {
       return {
@@ -233,14 +377,13 @@ try {
     assert.ok(Object.keys(settings.values).length > 0);
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        socket.off("message", received);
+        client.events.off("message", received);
         reject(new Error("Initial snapshot timeout"));
       }, 15_000);
-      const received = (raw) => {
-        const envelope = JSON.parse(raw);
+      const received = (envelope) => {
         if (envelope.requestId !== "smoke-snapshot") return;
         clearTimeout(timer);
-        socket.off("message", received);
+        client.events.off("message", received);
         try {
           assert.equal(envelope.ok, true);
           assert.ok(envelope.result.host_config);
@@ -250,7 +393,7 @@ try {
           reject(error);
         }
       };
-      socket.on("message", received);
+      client.events.on("message", received);
       socket.send(
         JSON.stringify({
           type: "ipc-renderer-invoke",
@@ -266,18 +409,19 @@ try {
     await delay(50);
     port1.close();
     port2.close();
-    socket.off("message", route);
-    socket.close();
+    client.events.off("message", route);
+    await Promise.all([closeClient(client), closeClient(second)]);
   }
   await delay(2000);
   assert.equal(child.exitCode, null, "Desktop bridge must remain running");
   console.log(
-    `Container smoke passed: ${process.arch}, native addons, authentication, WebSocket, AppHost settings, Desktop startup`,
+    `Container smoke passed: ${process.arch}, native addons, authentication, WebSocket, native state across connections, AppHost settings, Desktop startup`,
   );
 } catch (error) {
   console.error(diagnosticOutput);
   throw error;
 } finally {
+  await Promise.allSettled([...clients].map(closeClient));
   // Git helpers can create their own process groups; stop the complete test
   // subtree before removing its state. Never kill a PID that has been reused.
   const processes = (
