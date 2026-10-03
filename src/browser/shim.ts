@@ -29,6 +29,11 @@ import {
 } from "./shared-object-subscriptions";
 import { downloadErrorMessage, wrapBrowserServices } from "./downloads";
 import {
+  installBrowserNotifications,
+  type NotificationSound,
+} from "./notifications";
+import { mountNotificationSettings } from "./notification-settings";
+import {
   adaptDesktopBridge,
   desktopCapabilityOverrides,
 } from "./desktop-capabilities";
@@ -149,6 +154,12 @@ type ElectronShimState = {
   isTransportFailure?: typeof isTransportFailure;
   imageDrafts?: typeof imageDrafts;
   wrapBrowserServices?: typeof wrapBrowserServices;
+  notifications?: ReturnType<typeof installBrowserNotifications>;
+  mountNotificationSettings?: (
+    element: HTMLElement | null,
+    getSound?: () => NotificationSound,
+    locale?: string,
+  ) => void;
   downloadErrorMessage?: typeof downloadErrorMessage;
   configureStatsigOptions?: typeof configureStatsigOptions;
   configureStatsigClient?: <T extends StatsigClientLike>(
@@ -748,6 +759,15 @@ const themeMediaQuery = matchMedia("(prefers-color-scheme: dark)");
 const mobileMediaQuery = matchMedia("(max-width: 768px)");
 const initialSidebarState = !mobileMediaQuery.matches;
 const electronShim = (window.__ELECTRON_SHIM__ ??= {});
+const browserNotifications = installBrowserNotifications();
+electronShim.notifications = browserNotifications;
+let disposeNotificationSettings: (() => void) | undefined;
+electronShim.mountNotificationSettings = (element, getSound, locale) => {
+  disposeNotificationSettings?.();
+  disposeNotificationSettings = element
+    ? mountNotificationSettings(element, browserNotifications, getSound, locale)
+    : undefined;
+};
 electronShim.appServerRequestLifecycle = (event) => {
   rpcLifecycle.onLifecycle(event);
   appHostRecovery.observeNative(event);
@@ -835,7 +855,15 @@ electronShim.registerQueryClient = (client) => {
       .catch(() => {});
   });
 };
-electronShim.wrapBrowserServices = wrapBrowserServices;
+electronShim.wrapBrowserServices = (services) => {
+  const wrapped = wrapBrowserServices(services);
+  // Preserve the stable recovery proxy and its receivers. WAV previews use the
+  // existing authenticated native service; task completion never calls show().
+  browserNotifications.setPreviewSound((sound, callback) =>
+    (wrapped as any).notifications.previewSound(sound, callback),
+  );
+  return wrapped;
+};
 electronShim.downloadErrorMessage = downloadErrorMessage;
 electronShim.configureStatsigOptions = configureStatsigOptions;
 electronShim.configureStatsigClient = (client, sdkKey) =>

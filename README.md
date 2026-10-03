@@ -149,6 +149,18 @@ check actual history text, projects and required configuration; an input box or 
 WebSocket alone does not establish readiness. Cold asset transfer and large histories
 are measured separately from warm small-history reloads.
 
+Browser completion reminders use the existing task event for local and SSH hosts.
+Successful task completions can play the built-in sound even while the page is
+focused. In **General → Notifications**, the completion notification mode controls
+browser popups independently of the sound selection; choose **None** to mute.
+Popups show the conversation title and a completion message, without reply text,
+and open the corresponding conversation, including its remote host.
+Request browser notification permission explicitly in settings and click the
+sound preview to enable playback. Volume starts at 30% and stays on this browser
+and origin. Tabs on the same origin coordinate sound and popup delivery; denied
+permissions do not disable audio. Pages must stay open: Web Push after closing a
+page is not implemented, and suspended browsers may not deliver immediately.
+
 Unsent image attachments are saved in this browser's IndexedDB alongside the
 existing text draft behavior. Refreshing restores the images to the same task's
 composer (including the new-task composer). Original image data is retained, so

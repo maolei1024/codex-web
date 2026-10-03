@@ -21,6 +21,12 @@ assert.equal(
   `codex-cli ${release.codexCliVersion}`,
 );
 assert.equal(require("/app/src/server/electron/index.js").net.isOnline(), true);
+for (const sound of ["codex-notification.wav", "codex-classic.wav"]) {
+  const bytes = await readFile(`/app/scratch/asar/${sound}`);
+  assert.equal(bytes.toString("ascii", 0, 4), "RIFF");
+  assert.equal(bytes.toString("ascii", 8, 12), "WAVE");
+  assert.ok(bytes.length > 44, `${sound} must contain packaged audio`);
+}
 // OpenSSH resolves ~/.ssh from passwd, independently of the HOME environment.
 assert.equal(
   execFileSync("getent", ["passwd", String(process.getuid())], {

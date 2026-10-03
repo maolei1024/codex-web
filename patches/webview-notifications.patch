@@ -1,0 +1,350 @@
+--- a/webview/assets/app-initial-60d038a052d7.js
++++ b/webview/assets/app-initial-60d038a052d7.js
+@@ -521394,6 +521394,11 @@
+   (Nu.info(`[desktop-notifications] service starting`), R6s());
+   let { scope: n } = t,
+     r = new AbortController();
++  const browserNotifications = window.__ELECTRON_SHIM__?.notifications;
++  const readBrowserCompletionSettings = () => ({
++    turnMode: Pg(n.get, Qbe.turnMode) ?? `unfocused`,
++    sound: Pg(n.get, Qbe.sound) ?? `default`,
++  });
+   function i(t, i) {
+     return D6s(n, e, t, (t) =>
+       T6s(n, e, t.conversationId, (e) => {
+@@ -521459,7 +521464,10 @@
+                 safe: { conversationId: t.conversationId, turnId: t.turnId },
+                 sensitive: {},
+               }),
+-                d(s, r, I6s(n, e, t.conversationId, o)));
++                d(s, r, I6s(n, e, t.conversationId, o), void 0, {
++                  turnId: t.turnId,
++                  status: t.status,
++                }));
+             },
+           ),
+     c = i(
+@@ -521624,9 +521632,9 @@
+           d(o, r, () => a));
+       },
+     );
+-  function d(t, i, a, o) {
++  function d(t, i, a, o, completedTurn) {
+     let s = t.conversationId == null ? null : eg(t.conversationId);
+-    if (Se.notifications == null) return;
++    if (Se.notifications == null && !(t.kind === `turn-complete` && browserNotifications)) return;
+     let c = t.requestId,
+       l = (e) => {
+         try {
+@@ -521640,9 +521648,33 @@
+             ((t.kind === `permission` || t.kind === `question`) &&
+               h(s, t.kind)) ||
+             (t.kind === `agent-message` && p()) ||
+-            (t.kind === `turn-complete` && m())
++            (t.kind === `turn-complete` && !browserNotifications && m())
+           )
+             return;
++          if (t.kind === `turn-complete` && browserNotifications) {
++            if (completedTurn?.status === `completed`) {
++              const originalNavigation = a?.({ id: null, type: `open` });
++              Promise.resolve(browserNotifications.complete({
++                id: t.id,
++                title: t.title,
++                hostId: t.hostId,
++                conversationId: t.conversationId,
++                turnId: completedTurn.turnId,
++                navigationPath: t.navigationPath,
++                navigationState: typeof originalNavigation?.state?.activateTabId === `string`
++                  ? { activateTabId: originalNavigation.state.activateTabId }
++                  : void 0,
++                status: completedTurn.status,
++                ...readBrowserCompletionSettings(),
++              }, {
++                onOpen: () => originalNavigation,
++                signal: r.signal,
++              })).catch(() => {
++                Nu.warning(`[browser-notifications] completion alert unavailable`, { safe: {}, sensitive: {} });
++              });
++            }
++            return;
++          }
+           (Nu.info(`[desktop-notifications] show notification`, {
+             safe: {
+               conversationId: t.conversationId,
+@@ -521672,7 +521704,7 @@
+       r?.threadSource === `chatgpt_hidden` ||
+       r?.threadSource === `dreaming`
+       ? !0
+-      : m();
++      : browserNotifications ? !1 : m();
+   }
+   function p() {
+     return t.getIsWindowFocused();
+@@ -521713,6 +521745,7 @@
+   };
+ }
+ function R6s() {
++  if (window.__ELECTRON_SHIM__?.notifications) return;
+   try {
+     if (typeof Notification > `u`) {
+       Nu.warning(`[desktop-notifications] Notification API missing`);
+--- a/webview/assets/notifications-settings-624587a579c4.js
++++ b/webview/assets/notifications-settings-624587a579c4.js
+@@ -64,6 +64,7 @@
+   win as W,
+   wtn as G,
+   xEt as K,
++  yEt as getWebNotificationSetting,
+   zT as ve,
+ } from "./app-shared-59042e7300f7.js";
+ import {
+@@ -423,6 +424,7 @@
+   if (r[11] !== y || r[12] !== c || r[13] !== s) {
+     j = function (t) {
+       if (y) return;
++      void window.__ELECTRON_SHIM__?.notifications?.unlockAudio();
+       p.current?.abort();
+       let r = new AbortController();
+       ((p.current = r),
+@@ -451,7 +453,7 @@
+         u = await o.importSound({
+           decodeAudio: async (e) => {
+             let t = await w(e);
+-            return (t != null && ((l = !0), i(m(e, a), a)), t);
++            return (t != null && ((l = !0), i(window.__ELECTRON_SHIM__?.notifications?.playBytes(e, a) ?? m(e, a), a)), t);
+           },
+           title: c.formatMessage({
+             id: `notifications.sound.chooseTitle`,
+@@ -474,7 +476,7 @@
+       r == null ||
+         n.aborted ||
+         i(
+-          r.previewSound(e, (e) => m(e, n)),
++          r.previewSound(e, (e) => window.__ELECTRON_SHIM__?.notifications?.playBytes(e, n) ?? m(e, n)),
+           n,
+         );
+     }
+@@ -508,13 +510,18 @@
+       (r[15] = M),
+       (r[16] = N))
+     : ((M = r[15]), (N = r[16]));
++  if (window.__ELECTRON_SHIM__?.notifications) {
++    M = webNotificationText(c.locale, `完成提示音`, `Completion sound`);
++    N = webNotificationText(c.locale, `前台也可播放，选择“无”可静音。`, `Plays while this page is active. Choose None to mute.`);
++  }
+   let P;
+   return (
+     r[17] !== j ||
+     r[18] !== y ||
+     r[19] !== d ||
+     r[20] !== u?.platform ||
+-    r[21] !== l
++    r[21] !== l ||
++    window.__ELECTRON_SHIM__?.notifications
+       ? ((P = (0, X.jsx)(g, {
+           label: M,
+           description: N,
+@@ -1331,7 +1338,7 @@
+   );
+ }
+ function lt() {
+-  let e = (0, dt.c)(90),
++  let e = (0, dt.c)(91),
+     n = he(te),
+     o = ee(),
+     c = a(),
+@@ -1376,6 +1383,13 @@
+       (e[4] = n),
+       (e[5] = y))
+     : (y = e[5]);
++  const browserNotificationRef = (0, ft.useCallback)((element) => {
++    window.__ELECTRON_SHIM__?.mountNotificationSettings?.(
++      element,
++      () => getWebNotificationSetting(n.get, T.sound) ?? `default`,
++      o.locale,
++    );
++  }, [n, o.locale]);
+   let b = re(y),
+     x = ue(T.turnMode),
+     ne = ue(T.permissionsEnabled),
+@@ -1489,6 +1503,10 @@
+       (e[31] = ce),
+       (e[32] = le))
+     : ((ce = e[31]), (le = e[32]));
++  if (window.__ELECTRON_SHIM__?.notifications) {
++    ce = webNotificationText(o.locale, `完成时弹窗`, `Completion popup`);
++    le = webNotificationText(o.locale, `选择系统通知的显示时机，不影响提示音。`, `Choose when to show a system notification. Sound is independent.`);
++  }
+   let de = ae.find((e) => e.id === w)?.label,
+     R;
+   e[33] === de
+@@ -1534,7 +1552,7 @@
+       (e[42] = B))
+     : (B = e[42]);
+   let V;
+-  e[43] !== f || e[44] !== z || e[45] !== B
++  e[43] !== f || e[44] !== z || e[45] !== B || window.__ELECTRON_SHIM__?.notifications
+     ? ((V = (0, $.jsx)(g, {
+         label: ce,
+         description: le,
+@@ -1698,9 +1716,10 @@
+     e[85] !== ve ||
+     e[86] !== J ||
+     e[87] !== ke ||
+-    e[88] !== Ae
++    e[88] !== Ae ||
++    e[90] !== browserNotificationRef
+       ? ((Me = (0, $.jsxs)($.Fragment, {
+-          children: [se, V, ve, J, ke, Ae, je],
++          children: [se, V, ve, J, ke, Ae, je, (0, $.jsx)(`div`, { ref: browserNotificationRef })],
+         })),
+         (e[83] = se),
+         (e[84] = V),
+@@ -1708,11 +1727,15 @@
+         (e[86] = J),
+         (e[87] = ke),
+         (e[88] = Ae),
+-        (e[89] = Me))
++        (e[89] = Me),
++        (e[90] = browserNotificationRef))
+       : (Me = e[89]),
+     Me
+   );
+ }
++function webNotificationText(locale, chinese, english) {
++  return /^zh(?:-|$)/i.test(locale ?? navigator.language) ? chinese : english;
++}
+ async function ut() {
+   return t.systemPermissions?.openNotificationSettings();
+ }
+--- a/webview/assets/app-initial-60d038a052d7.js
++++ b/webview/assets/app-initial-60d038a052d7.js
+@@ -468010,7 +468010,7 @@
+       (t[0] = o),
+       (t[1] = f));
+   let p = f,
+-    m = p == null && (u || !0),
++    m = p == null && (u || !0) && !e.browserSettingsNarrow,
+     h = c && p == null,
+     g = p != null,
+     _;
+@@ -473625,7 +473625,7 @@
+   }))();
+ }
+ function Tgs(e) {
+-  let t = (0, Egs.c)(22),
++  let t = (0, Egs.c)(23),
+     { children: n, legacyContentRef: r, requestNavigation: i, sidebar: a } = e,
+     o = Ah($s),
+     s = (0, Dgs.useContext)(ZV),
+@@ -473658,15 +473658,17 @@
+       (t[14] = d))
+     : (d = t[14]);
+   let f;
+-  t[15] !== a || t[16] !== u || t[17] !== d
++  t[15] !== a || t[16] !== u || t[17] !== d || t[22] !== e.browserSettingsNarrow
+     ? ((f = (0, J6.jsxs)(zus, {
+         contextualNavigation: a,
++        browserSettingsNarrow: e.browserSettingsNarrow,
+         children: [null, l, u, d],
+       })),
+       (t[15] = a),
+       (t[16] = u),
+       (t[17] = d),
+-      (t[18] = f))
++      (t[18] = f),
++      (t[22] = e.browserSettingsNarrow))
+     : (f = t[18]);
+   let p;
+   return (
+--- a/webview/assets/settings-page-18f0a638496e.js
++++ b/webview/assets/settings-page-18f0a638496e.js
+@@ -2335,8 +2335,59 @@
+       }));
+   }))();
+ }
++function subscribeBrowserSettingsViewport(listener) {
++  if (!window.__ELECTRON_SHIM__?.notifications || !window.matchMedia) return () => {};
++  const query = window.matchMedia('(max-width: 767px)');
++  if (query.addEventListener) {
++    query.addEventListener('change', listener);
++    return () => query.removeEventListener('change', listener);
++  }
++  query.addListener(listener);
++  return () => query.removeListener(listener);
++}
++function readBrowserSettingsViewport() {
++  return Boolean(window.__ELECTRON_SHIM__?.notifications && window.matchMedia?.('(max-width: 767px)').matches);
++}
++function readDesktopSettingsViewport() { return false; }
++function BrowserSettingsNarrowLayout({ children, sidebar, onBack, locale, navigationKey }) {
++  const menu = Si.useRef(null);
++  const chinese = /^zh(?:-|$)/i.test(locale ?? navigator.language);
++  Si.useEffect(() => { if (menu.current) menu.current.open = false; }, [navigationKey]);
++  return (0, $.jsxs)('div', {
++    style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0 },
++    children: [
++      (0, $.jsxs)('div', {
++        style: { display: 'flex', alignItems: 'start', gap: 8, padding: '8px 12px', flexShrink: 0, borderBottom: '1px solid var(--color-border)' },
++        children: [
++          (0, $.jsx)('button', {
++            type: 'button', className: 'rounded-lg text-sm text-default hover:bg-token-list-hover-background focus-visible:outline-2 focus-visible:outline-ring',
++            style: { minHeight: 44, padding: '8px 12px', flexShrink: 0 }, onClick: onBack,
++            children: chinese ? '返回' : 'Back',
++          }),
++          (0, $.jsxs)('details', {
++            ref: menu, style: { flex: 1, minWidth: 0 },
++            onClick: event => { if (event.target.closest?.('[data-settings-panel-slug]')) { menu.current.open = false; menu.current.querySelector('summary')?.focus(); } },
++            children: [
++              (0, $.jsx)('summary', {
++                className: 'rounded-lg text-sm font-medium text-default focus-visible:outline-2 focus-visible:outline-ring',
++                style: { minHeight: 44, padding: '10px 12px', cursor: 'pointer' },
++                children: chinese ? '设置分类' : 'Settings categories',
++              }),
++              (0, $.jsx)('div', {
++                style: { display: 'flex', height: 'min(52dvh, 420px)', minHeight: 0, overflow: 'hidden', paddingTop: 8 },
++                children: sidebar,
++              }),
++            ],
++          }),
++        ],
++      }),
++      (0, $.jsx)('div', { style: { flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }, children }),
++    ],
++  });
++}
+ function gi() {
+-  let e = (0, xi.c)(143),
++  const browserSettingsNarrow = Si.useSyncExternalStore(subscribeBrowserSettingsViewport, readBrowserSettingsViewport, readDesktopSettingsViewport);
++  let e = (0, xi.c)(144),
+     t = Ve(fe),
+     n = (0, Si.useRef)(!1),
+     i;
+@@ -2896,19 +2947,24 @@
+       (e[130] = rt),
+       (e[131] = q))
+     : (q = e[131]);
++  const browserSettingsContent = browserSettingsNarrow
++    ? (0, $.jsx)(BrowserSettingsNarrowLayout, { sidebar: tt, onBack: je, locale: c.locale, navigationKey: nt, children: q })
++    : q;
+   let J;
+-  e[132] !== R || e[133] !== qe || e[134] !== tt || e[135] !== q
++  e[132] !== R || e[133] !== qe || e[134] !== tt || e[135] !== q || e[143] !== browserSettingsNarrow || browserSettingsNarrow
+     ? ((J = (0, $.jsx)(Rt, {
+         legacyContentRef: qe,
+         requestNavigation: R,
+         sidebar: tt,
+-        children: q,
++        browserSettingsNarrow,
++        children: browserSettingsContent,
+       })),
+       (e[132] = R),
+       (e[133] = qe),
+       (e[134] = tt),
+       (e[135] = q),
+-      (e[136] = J))
++      (e[136] = J),
++      (e[143] = browserSettingsNarrow))
+     : (J = e[136]);
+   let Y;
+   e[137] === Symbol.for(`react.memo_cache_sentinel`)

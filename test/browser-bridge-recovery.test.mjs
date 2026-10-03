@@ -122,6 +122,10 @@ function setup(t) {
         },
         "./mobile-viewport": { installMobileViewportGuard() {} },
         "./recovery-notice": { recoveryNotice() {}, checkForUpdate() {} },
+        "./notifications": {
+          installBrowserNotifications: () => ({ setPreviewSound() {} }),
+        },
+        "./notification-settings": { mountNotificationSettings() {} },
       }[name] ??
       {},
   });

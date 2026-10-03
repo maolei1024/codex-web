@@ -236,6 +236,8 @@ test("built Desktop service initialization and artifact analytics use browser ad
   assert.match(header, /downloadStarted/);
   assert.match(
     preload,
-    /electronShim.wrapBrowserServices\s*=\s*wrapBrowserServices/,
+    /electronShim.wrapBrowserServices\s*=\s*\(services\)\s*=>/,
   );
+  assert.match(preload, /wrapBrowserServices\(services\)/);
+  assert.match(preload, /setPreviewSound/);
 });
