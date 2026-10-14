@@ -1,6 +1,7 @@
---- a/.vite/build/main-C3nRcJ3D.js
-+++ b/.vite/build/main-C3nRcJ3D.js
-@@ -13628,7 +13628,7 @@
+--- a/.vite/build/main-CwxgTOle.js
++++ b/.vite/build/main-CwxgTOle.js
+@@ -14045,7 +14045,7 @@
+       this.sender = new i.Bt({
          ...e,
          deliver: (e, t, n) => {
 -          e.send(t.channel, n ?? t.payload);
@@ -8,8 +9,7 @@
          },
          getPayload: (e) => e.payload,
          isAvailable: (e) => !e.isDestroyed(),
-         isLoading: (e) => e.isLoading?.() === !0,
-@@ -13652,20 +13652,19 @@
+@@ -14070,20 +14070,19 @@
        });
      }
      send(e, t, n) {
@@ -26,15 +26,15 @@
 +      globalThis.__CODEX_WEB_RENDERERS__.send(this.sender, e, { channel: t, payload: n }, "critical");
      }
      sendInlineMessageForView(e, t) {
-       this.sendInline(e, m.Q, t);
+       this.sendInline(e, g.bt, t);
      }
      acknowledge(e, t, n) {
 -      this.sender.acknowledge(e, t, n);
 +      globalThis.__CODEX_WEB_RENDERERS__.acknowledge(this.sender, e, t, n);
      }
    },
-   Fie = n.F([n.N(), n.D().int()]);
-@@ -33628,25 +33627,30 @@
+   qie = n.F([n.N(), n.D().int()]);
+@@ -35137,7 +35136,7 @@
        return this.options.appServerConnectionRegistry.getConnection(e);
      }
      getAbortControllerKey(e, t) {
@@ -42,16 +42,15 @@
 +      return globalThis.__CODEX_WEB_RENDERERS__.requestKey(e, t);
      }
      async handleRequest(e, t) {
-       if (t.url === Hb) {
-         await this.handleDictationStreamConnectInfoRequest(e, t);
-         return;
+       if (t.url === cle) {
+@@ -35146,16 +35145,21 @@
        }
        let n = new AbortController(),
          r = this.getAbortControllerKey(e, t.requestId);
+-      if ((this.abortControllers.set(r, n), this.isVsCodeFetchRequest(t.url))) {
 +      this.abortControllers.set(r, n);
 +      const stopRead = globalThis.__CODEX_WEB_RENDERERS__.trackRead(
 +        e, t.url, n, () => this.abortControllers.delete(r));
--      if ((this.abortControllers.set(r, n), this.isVsCodeFetchRequest(t.url))) {
 +      if (this.isVsCodeFetchRequest(t.url)) {
          try {
            await this.handleVsCodeFetchRequest(e, t, n.signal);
@@ -67,11 +66,11 @@
          Error(`HTTP requests must use the HTTP fetch service.`)
        );
      }
-@@ -103654,6 +103658,7 @@
+@@ -106475,6 +106479,7 @@
+         this.sharedObjectSubscriberOrigins.has(e) ||
            (this.sharedObjectSubscriberOrigins.add(e),
            e.once(`destroyed`, () => {
 +            this.sharedObjectSubscriberOrigins.delete(e);
              for (let [t, n] of this.sharedObjectSubscribers)
                (n.delete(e),
                  n.size === 0 && this.sharedObjectSubscribers.delete(t));
-           }));

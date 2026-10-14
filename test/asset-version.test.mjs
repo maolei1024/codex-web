@@ -27,7 +27,7 @@ test("published HTML and patched SDK use this build's preload and configuration 
   assert.ok(html.includes(`/assets/__build/${build.id}/index-`));
   assert.doesNotMatch(html, /["']\/assets\/(?!__build\/)/);
   const initial = await readFile(
-    "scratch/asar/webview/assets/app-shared-59042e7300f7.js",
+    "scratch/asar/webview/assets/app-shared-8340f229c2b3.js",
     "utf8",
   );
   assert.match(initial, /__ELECTRON_SHIM__\.configureStatsigClient/);

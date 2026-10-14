@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import { format } from "prettier";
 import test from "node:test";
 import { nativeRequestClient } from "./desktop-request-harness.mjs";
 import { importTypescriptModule } from "./import-typescript-module.mjs";
@@ -13,17 +14,17 @@ const settle = async () => {
 };
 
 async function nativeScheduler() {
-  const source = await readFile(
-    "scratch/asar/.vite/build/bootstrap-yYZ8rgHq.js",
-    "utf8",
+  const source = await format(
+    await readFile("scratch/asar/.vite/build/src-DCNiwad_.js", "utf8"),
+    { parser: "babel" },
   );
-  const start = source.indexOf("var lj = 8,");
-  const end = source.indexOf("var kj =", start);
+  const start = source.indexOf("var tR = 8,");
+  const end = source.indexOf("var xR =", start);
   assert.ok(
     start >= 0 && end > start,
     "pinned Desktop host scheduler must exist",
   );
-  const Scheduler = vm.runInNewContext(`${source.slice(start, end)}; Ej`, {
+  const Scheduler = vm.runInNewContext(`${source.slice(start, end)}; vR`, {
     Date,
     setTimeout,
     clearTimeout,

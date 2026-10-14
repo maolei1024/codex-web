@@ -1,94 +1,94 @@
---- a/webview/assets/app-initial-60d038a052d7.js
-+++ b/webview/assets/app-initial-60d038a052d7.js
-@@ -164571,6 +164571,7 @@
+--- a/webview/assets/app-initial-1ab6fbe93c4f.js
++++ b/webview/assets/app-initial-1ab6fbe93c4f.js
+@@ -144500,6 +144500,7 @@
+     n = rpe(e.appVersion),
+     r = e.buildFlavor !== `prod`;
+   (V1n({
++    enabled: !1,
+     beforeBreadcrumb: TLe,
+     beforeSend: pNe,
+     dsn: e.dsn,
+@@ -201675,6 +201676,7 @@
          attachmentOrder: r.attachmentOrder.filter((e) => t.has(e)),
        });
      }
-+    if (r.imageAttachments !== n.imageAttachments) window.__ELECTRON_SHIM__.imageDrafts.save(X7n(e), r.imageAttachments);
-     e.set(Xdr, r);
++    if (r.imageAttachments !== n.imageAttachments) window.__ELECTRON_SHIM__.imageDrafts.save(NIr(e), r.imageAttachments);
+     e.set(SXr, r);
    }
  }
-@@ -165065,7 +165066,10 @@
+@@ -202155,7 +202157,10 @@
              t.value.kind === `local`
                ? t.value
                : { clientThreadId: null, conversationId: null };
 -          return t.watch(({ get: e }) => {
 +          const stopImageDraft = window.__ELECTRON_SHIM__.imageDrafts.mount(
-+            X7n(t), () => t.get(fR).imageAttachments,
-+            images => rR(t, state => { state.imageAttachments = images; }));
++            NIr(t), () => t.get(RV).imageAttachments,
++            images => jV(t, state => { state.imageAttachments = images; }));
 +          const stopDesktopWatch = t.watch(({ get: e }) => {
              if (i == null) return;
-             let n = e(Wdr, i),
-               r = a ?? (au(i) ? e(Vl, i) : null),
-@@ -165084,6 +165088,7 @@
+             let n = e(yXr, i),
+               r = a ?? (pr(i) ? e(jd, i) : null),
+@@ -202174,6 +202179,7 @@
                  }),
-                 t.set(Wdr, i, [])));
+                 t.set(yXr, i, [])));
            });
 +          return () => { stopImageDraft(); stopDesktopWatch(); };
          },
        })),
-       (Zdr = Ko(pS, ({ get: e, scope: t }) => {
-@@ -189273,6 +189278,7 @@
-     n = $se(e.appVersion),
-     r = e.buildFlavor !== `prod`;
-   (aBr({
-+    enabled: !1,
-     beforeBreadcrumb: Hue,
-     beforeSend: KWe,
-     dsn: e.dsn,
-@@ -201747,6 +201753,9 @@
+       (CXr = Cu(As, ({ get: e, scope: t }) => {
+@@ -220288,6 +220294,9 @@
        (r[3] = a))
      : (a = r[3]);
    let o = a;
 +  window.__ELECTRON_SHIM__.closeSidebar = () => {
-+    XIt(e, !1, { animate: t });
++    fzt(e, !1, { animate: t });
 +  };
-   nH(`toggleSidebar`, o);
+   xw(`toggleSidebar`, o);
    let s;
    (r[4] !== i || r[5] !== e || r[6] !== t
-@@ -202721,7 +202730,7 @@
+@@ -221262,7 +221271,7 @@
          "--app-shell-root-banner-height": le,
-         "--app-shell-navigation-rail-width": dt,
-         "--app-shell-application-menu-height": ft,
--        "--spacing-token-safe-header-left": pt,
+         "--app-shell-navigation-rail-width": ut,
+         "--app-shell-application-menu-height": dt,
+-        "--spacing-token-safe-header-left": ft,
 +        "--spacing-token-safe-header-left": `0px`,
-         "--spacing-token-safe-header-right": mt,
+         "--spacing-token-safe-header-right": pt,
          "--app-shell-animated-left-panel-width": void 0,
          width: `calc(100vw / var(--codex-window-zoom))`,
-@@ -301625,12 +301634,15 @@
+@@ -324116,12 +324125,15 @@
      ? (i = t[1])
      : ((i = () =>
-         Sye([{ path: `*`, Component: fSa, ErrorBoundary: pSa }], {
+         RNe([{ path: `*`, Component: HHa, ErrorBoundary: UHa }], {
 -          initialEntries: r,
 +          initialEntries: r ?? [window.__ELECTRON_SHIM__.initialRoute],
          })),
        (t[0] = r),
        (t[1] = i));
-   let [a] = (0, hSa.useState)(i),
+   let [a] = (0, GHa.useState)(i),
      o;
-+  hSa.useEffect(() => a.subscribe(state => {
++  GHa.useEffect(() => a.subscribe(state => {
 +    window.__ELECTRON_SHIM__.onMemoryNavigationChanged({ action: state.historyAction, location: state.location });
 +  }), [a]);
    t[2] === a
      ? (o = t[3])
-     : ((o = (0, gSa.jsx)(tn, { router: a, useTransitions: !1 })),
-@@ -492795,7 +492807,9 @@
+     : ((o = (0, KHa.jsx)(nHa, { router: a, useTransitions: !1 })),
+@@ -505291,7 +505303,9 @@
      { client: n } = e,
-     r = Ah(q),
-     [, i] = Al(`statsig_default_enable_features`),
--    [, a] = Al(`statsig_evaluations`),
+     r = Oi(q),
+     [, i] = nn(`statsig_default_enable_features`),
+-    [, a] = nn(`statsig_evaluations`),
 +    // Atom get/set also briefly mounts a subscription. This publisher must
 +    // never read the shared snapshot; keep its deduplication state locally.
-+    a = RPs.useRef(null),
++    a = nQs.useRef(null),
      o,
      s;
    (t[0] !== n || t[1] !== r
-@@ -492814,18 +492828,10 @@
+@@ -505310,18 +505324,10 @@
              let t = e?.status ?? n.loadingStatus;
-             kPs(n, t).catch(FPs);
-             let o = wPs(n);
--            (0, LPs.default)(gd(r.get, `statsig_evaluations`), o) ||
--              (Nu.debug(`Publishing Statsig execution evaluations`, {
+             xZs(n, t).catch($Zs);
+             let o = XZs(n);
+-            (0, tQs.default)(Lc(r.get, `statsig_evaluations`), o) ||
+-              (gr.debug(`Publishing Statsig execution evaluations`, {
 -                safe: {
 -                  status: t,
 -                  unifiedProjects:
@@ -99,60 +99,60 @@
 -                sensitive: {},
 -              }),
 -              a(o));
-+            if (!(0, LPs.default)(a.current, o)) {
++            if (!(0, tQs.default)(a.current, o)) {
 +              a.current = o;
-+              _s.dispatchMessage(`shared-object-set`, { key: `statsig_evaluations`, value: o });
++              Ho.dispatchMessage(`shared-object-set`, { key: `statsig_evaluations`, value: o });
 +            }
              let s =
                o.payload === void 0
                  ? void 0
-@@ -493991,6 +493997,7 @@
- function cFs(e) {
+@@ -506552,6 +506558,7 @@
+ function OQs(e) {
    let t = {
-     ...bFs,
+     ...BQs,
 +    overrideAdapter: window.__ELECTRON_SHIM__.overrideAdapter,
      enableLiveValuesAutoRefresh: !0,
      ...(e === !0 ? {} : { disableStorage: !0, loggingEnabled: `disabled` }),
    };
-@@ -528253,6 +528260,7 @@
+@@ -536911,6 +536918,7 @@
    }))();
  }
- function Ftc(e) {
-+  window.__ELECTRON_SHIM__.registerQueryClient(Sf());
-   let t = (0, Itc.c)(3),
+ function Ohc(e) {
++  window.__ELECTRON_SHIM__.registerQueryClient(ku());
+   let t = (0, khc.c)(3),
      { children: n } = e;
-   if (nt()) {
-@@ -545048,6 +545056,13 @@
-   return nVe(Obs);
+   if (Pt()) {
+@@ -555439,6 +555447,13 @@
+   return tRe(ZIs);
  }
- function Byc() {
-+  const location = os(), hosts = Z(ra), mountedHost = Z5.useRef(null);
+ function QPc() {
++  const location = Nr(), hosts = G(Ie), mountedHost = F5.useRef(null);
 +  const host = new URLSearchParams(location.search).get("hostId");
 +  const waiting = host != null && !hosts.includes(host) && mountedHost.current !== host;
 +  if (!waiting) mountedHost.current = host;
-+  return waiting ? Q5.jsx(v8, { debugName: "Remote host" }) : Q5.jsx(codexWebReadyRoute, {});
++  return waiting ? I5.jsx(Y6, { debugName: "Remote host" }) : I5.jsx(codexWebReadyRoute, {});
 +}
 +function codexWebReadyRoute() {
-   let e = (0, X5.c)(63),
-     t = Ah(q),
-     n = (0, Z5.useRef)(!1),
-@@ -545749,64 +545764,34 @@
-       (cbc = { fallbackDragRegion: sbc }));
+   let e = (0, P5.c)(59),
+     t = Oi(q),
+     n = (0, F5.useRef)(!1),
+@@ -556129,64 +556144,34 @@
+       (yFc = { fallbackDragRegion: vFc }));
    }))();
  }
--function ubc(e) {
--  let t = (0, fbc.c)(5),
+-function xFc(e) {
+-  let t = (0, CFc.c)(5),
 -    { startupReady: n } = e,
 -    r;
 -  t[0] === Symbol.for(`react.memo_cache_sentinel`)
 -    ? ((r =
--        !mbc && !hbc
--          ? (0, t7.jsx)(t7.Fragment, {
--              children: (0, t7.jsx)(`div`, {
+-        !TFc && !EFc
+-          ? (0, z5.jsx)(z5.Fragment, {
+-              children: (0, z5.jsx)(`div`, {
 -                "aria-hidden": !0,
--                className: As(
+-                className: eg(
 -                  `pointer-events-none fixed inset-x-0 top-0 h-toolbar draggable`,
--                  cbc.fallbackDragRegion,
+-                  yFc.fallbackDragRegion,
 -                ),
 -              }),
 -            })
@@ -161,13 +161,13 @@
 -    : (r = t[0]);
 -  let i;
 -  t[1] === Symbol.for(`react.memo_cache_sentinel`)
--    ? ((i = (0, t7.jsx)(wxa, {})), (t[1] = i))
+-    ? ((i = (0, z5.jsx)(zVa, {})), (t[1] = i))
 -    : (i = t[1]);
 -  let a;
 -  t[2] === Symbol.for(`react.memo_cache_sentinel`)
 -    ? ((a =
--        !mbc && !hbc && !gbc && Se.startup != null
--          ? (0, t7.jsx)(`span`, { ref: dbc, "aria-hidden": !0, hidden: !0 })
+-        !TFc && !EFc && !DFc && Pd.startup != null
+-          ? (0, z5.jsx)(`span`, { ref: SFc, "aria-hidden": !0, hidden: !0 })
 -          : null),
 -      (t[2] = a))
 -    : (a = t[2]);
@@ -175,20 +175,20 @@
 -  return (
 -    t[3] === n
 -      ? (o = t[4])
--      : ((o = (0, t7.jsxs)(pbc.StrictMode, {
+-      : ((o = (0, z5.jsxs)(wFc.StrictMode, {
 -          children: [
 -            r,
--            (0, t7.jsxs)(XB, {
+-            (0, z5.jsxs)(vN, {
 -              name: `App`,
 -              fallback: i,
 -              onError: void 0,
 -              children: [
 -                a,
 -                n == null
--                  ? (0, t7.jsx)(Pyc, {})
--                  : (0, t7.jsx)(pbc.Suspense, {
--                      fallback: (0, t7.jsx)(v8, { debugName: `Startup` }),
--                      children: (0, t7.jsx)(Pyc, { startupReady: n }),
+-                  ? (0, z5.jsx)(KPc, {})
+-                  : (0, z5.jsx)(wFc.Suspense, {
+-                      fallback: (0, z5.jsx)(Y6, { debugName: `Startup` }),
+-                      children: (0, z5.jsx)(KPc, { startupReady: n }),
 -                    }),
 -              ],
 -            }),
@@ -198,16 +198,16 @@
 -        (t[4] = o)),
 -    o
 -  );
-+function ubc({ required, markReady }) {
-+  const [ready, setReady] = pbc.useState(!required);
-+  const [revision, setRevision] = pbc.useState(0);
-+  const readyRef = pbc.useRef(!required), errorRef = pbc.useRef(null);
-+  pbc.useEffect(() => {
++function xFc({ required, markReady }) {
++  const [ready, setReady] = wFc.useState(!required);
++  const [revision, setRevision] = wFc.useState(0);
++  const readyRef = wFc.useRef(!required), errorRef = wFc.useRef(null);
++  wFc.useEffect(() => {
 +    let active = true, sequence = 0;
 +    const read = () => {
 +      if (readyRef.current) return;
 +      const attempt = ++sequence;
-+      Promise.resolve().then(() => Se.startup.whenReady()).then(value => {
++      Promise.resolve().then(() => Pd.startup.whenReady()).then(value => {
 +        if (!active || attempt !== sequence) return;
 +        markReady(value); readyRef.current = true; setReady(true);
 +      }, () => {});
@@ -220,76 +220,76 @@
 +    read();
 +    return () => { active = false; sequence++; remove(); };
 +  }, [required, markReady]);
-+  return t7.jsxs(pbc.StrictMode, { children: [
-+    !mbc && !hbc ? t7.jsx(`div`, { "aria-hidden": true, className: As(`pointer-events-none fixed inset-x-0 top-0 h-toolbar draggable`, cbc.fallbackDragRegion) }) : null,
-+    t7.jsxs(XB, { name: `App`, resetKey: revision, fallback: t7.jsx(wxa, {}),
-+      onError: error => { errorRef.current = error; }, onReset: () => { errorRef.current = null; },
-+      children: [!mbc && !hbc && !gbc && Se.startup != null ? t7.jsx(`span`, { ref: dbc, "aria-hidden": true, hidden: true }) : null,
-+        ready ? t7.jsx(Pyc, {}) : t7.jsx(v8, { debugName: `Startup` })] })] });
++  return z5.jsxs(wFc.StrictMode, { children: [
++    !TFc && !EFc ? z5.jsx(`div`, { "aria-hidden": true, className: eg(`pointer-events-none fixed inset-x-0 top-0 h-toolbar draggable`, yFc.fallbackDragRegion) }) : null,
++    z5.jsxs(vN, { name: `App`, resetKey: revision, fallback: z5.jsx(zVa, {}),
++      onError: e => { errorRef.current = e; }, onReset: () => { errorRef.current = null; },
++      children: [!TFc && !EFc && !DFc && Pd.startup != null ? z5.jsx(`span`, { ref: SFc, "aria-hidden": true, hidden: true }) : null,
++        ready ? z5.jsx(KPc, {}) : z5.jsx(Y6, { debugName: `Startup` })] })] });
  }
- function dbc(e) {
-   e != null && (Zo.markInitializationPhase(`renderer_ready`), szi());
-@@ -545861,10 +545846,7 @@
-   Nu.info(`[statsig-refresh-diagnostics] React root render requested`, {
+ function SFc(e) {
+   e != null && (vs.markInitializationPhase(`renderer_ready`), e5i());
+@@ -556250,10 +556235,7 @@
+   gr.info(`[statsig-refresh-diagnostics] React root render requested`, {
      safe: { windowType: `electron` },
    });
 -  let e =
--    Tbc || Ebc || Dbc || Se.startup?.whenReady == null
+-    IFc || LFc || zFc || Pd.startup?.whenReady == null
 -      ? void 0
--      : Promise.resolve(Se.startup.whenReady()).then((e) => {
+-      : Promise.resolve(Pd.startup.whenReady()).then((e) => {
 +  const markReady = e => {
            try {
-             var t = zi();
+             var t = pg();
              let n = t.u(e),
-@@ -545879,8 +545861,9 @@
+@@ -556268,8 +556250,8 @@
            } finally {
              t.d();
            }
 -        });
--  return (0, Cbc.jsx)(ubc, { startupReady: e });
-+
+-  return (0, PFc.jsx)(xFc, { startupReady: e });
 +  };
-+  return Cbc.jsx(ubc, { required: !Tbc && !Ebc && !Dbc && Se.startup?.whenReady != null, markReady });
++  return PFc.jsx(xFc, { required: !IFc && !LFc && !zFc && Pd.startup?.whenReady != null, markReady });
  }
- async function Sbc() {}
- var Cbc, wbc, Tbc, Ebc, Dbc, Obc, kbc, Abc, jbc;
-@@ -561372,13 +561355,15 @@
-             : EL({ schema: x, text: e })),
-     R != null && d != null && !p && (R = Fir(R, d, e ?? void 0)));
-   let z = d == null ? null : PNc(p ? d : null, (e) => wNc(y, e)),
+ async function NFc() {}
+ var PFc, FFc, IFc, LFc, RFc, zFc, BFc, VFc, HFc, UFc;
+@@ -560541,14 +560523,15 @@
+             : tV({ schema: C, text: e })),
+     z != null && d != null && !p && (z = IHr(z, d, e ?? void 0)));
+   let B = d == null ? null : kzc(p ? d : null, (e) => yzc(x, e)),
 +    inputModeDisabled = false,
-+    getAttributes = () => ({ "aria-multiline": `true`, dir: `auto`, role: `textbox`, spellcheck: `true`, ...(inputModeDisabled ? {} : { inputmode: `none` }) }),
++    getAttributes = () => ({ "aria-multiline": `true`, dir: `auto`, role: `textbox`, spellcheck: `true`, tabindex: `0`, ...(inputModeDisabled ? {} : { inputmode: `none` }) }),
 +    setPointerInputMode = value => {
 +      if (inputModeDisabled === value) return;
 +      inputModeDisabled = value;
-+      if (!B.isDestroyed) B.setProps({ attributes: getAttributes });
++      if (!V.isDestroyed) V.setProps({ attributes: getAttributes });
 +    },
-     B = new VIe(null, {
+     V = new VAe(null, {
 -      attributes: {
 -        "aria-multiline": `true`,
 -        dir: `auto`,
 -        role: `textbox`,
 -        spellcheck: `true`,
+-        tabindex: `0`,
 -      },
 +      attributes: getAttributes,
-       transformPastedText: A.transformPastedText,
+       transformPastedText: M.transformPastedText,
        transformPastedHTML(e) {
-         if ((A.transformPastedHTML(e), e.length > 1e5)) return ` `;
-@@ -561548,8 +561533,10 @@
-           S.dispatchEvent(new m7n(e)));
+         if ((M.transformPastedHTML(e), e.length > 1e5)) return ` `;
+@@ -560723,8 +560706,10 @@
+           w.dispatchEvent(new ZFr(e)));
        },
        handleDOMEvents: {
 +        touchstart() { setPointerInputMode(true); return false; },
 +        blur() { setPointerInputMode(false); return false; },
-         keydown: (e, t) => A.handleKeyEvent(t),
--        mousedown: (e, t) => A.handleMouseDown(t),
-+        mousedown: (e, t) => { setPointerInputMode(true); return A.handleMouseDown(t); },
+         keydown: (e, t) => M.handleKeyEvent(t),
+-        mousedown: (e, t) => M.handleMouseDown(t),
++        mousedown: (e, t) => { setPointerInputMode(true); return M.handleMouseDown(t); },
          keyup(e, t) {
-           A.handleKeyEvent(t);
+           M.handleKeyEvent(t);
            let { $from: n, empty: r } = e.state.selection;
-@@ -598832,7 +598819,7 @@
-     c = os(),
-     l = Ed(),
+@@ -615697,7 +615682,7 @@
+     c = Nr(),
+     l = xc(),
      u = n != null,
 -    d = o?.prefillPrompt,
 +    d = o?.prefillPrompt ?? new URLSearchParams(c.search).get(`prompt`),

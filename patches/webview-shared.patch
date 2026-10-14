@@ -1,33 +1,33 @@
---- a/webview/assets/app-shared-59042e7300f7.js
-+++ b/webview/assets/app-shared-59042e7300f7.js
-@@ -14168,6 +14168,7 @@
+--- a/webview/assets/app-shared-8340f229c2b3.js
++++ b/webview/assets/app-shared-8340f229c2b3.js
+@@ -14163,6 +14163,7 @@
            if (n?.sendMessageFromView) {
              let r = e;
              (n.sendMessageFromView(r).catch((t) => {
 +              if (window.__ELECTRON_SHIM__?.isTransportFailure?.(t)) return;
                r.type !== `log-message` &&
-                 mf.warning(`Failed to send message from view`, {
+                 zf.warning(`Failed to send message from view`, {
                    safe: { type: r.type },
-@@ -31793,7 +31794,7 @@
+@@ -31817,7 +31818,7 @@
    }
  }
- function Ade() {
+ function Pde() {
 -  return !0;
 +  return window.__ELECTRON_SHIM__.initialSidebarState;
  }
- function jde(e) {
+ function Fde(e) {
    return typeof e == `object` && !!e && `type` in e;
-@@ -127144,7 +127145,7 @@
+@@ -119861,7 +119862,7 @@
          }
        }),
-       (rVt = class {
+       (VFt = class {
 -        encodingLevel = `structuredClonable`;
 +        encodingLevel = `jsonCompatible`;
          constructor(e) {
            ((this.#e = e),
              e.start(),
-@@ -172074,9 +172075,13 @@
-               mf.error(`Received app server error`, {
+@@ -174417,9 +174418,13 @@
+               zf.error(`Received app server error`, {
                  safe: {},
                  sensitive: { id: e, error: t },
 -              }));
@@ -41,16 +41,16 @@
            if (this.dispatchMessage == null)
              throw Error(
                `AppServerRequestClient is missing a message dispatcher`,
-@@ -172534,7 +172539,7 @@
+@@ -174880,7 +174885,7 @@
              return;
            }
            let n = Date.now(),
 -            r = Error(`Timeout`);
 +            r = Object.assign(Error(`Timeout`), { name: "CodexWebTransportError" });
-           (mf.warning(`mcp_request_timeout`, {
+           (zf.warning(`mcp_request_timeout`, {
              safe: {
                requestId: e,
-@@ -172597,6 +172602,7 @@
+@@ -174943,6 +174948,7 @@
              }));
          }
          emitRequestLifecycleEvent(e) {
@@ -58,9 +58,9 @@
            for (let t of this.requestLifecycleListeners)
              try {
                t(e);
-@@ -175125,19 +175131,23 @@
+@@ -180786,19 +180792,23 @@
        (e.useStatsigInternalClientFactoryAsync = void 0));
-     var t = eI(),
+     var t = qL(),
        n = o();
 +    const codexWebInitializations = new WeakMap();
      function r(e, r) {
@@ -94,8 +94,8 @@
      }
      e.useStatsigInternalClientFactoryAsync = r;
    }),
-@@ -175148,7 +175158,14 @@
-       n = mfn();
+@@ -180809,7 +180819,14 @@
+       n = $vn();
      function r(e, r, i = null) {
        return (0, n.useStatsigInternalClientFactoryAsync)(
 -        (e) => new t.StatsigClient(e.sdkKey, e.initialUser, e.statsigOptions),
@@ -110,7 +110,7 @@
          { sdkKey: e, initialUser: r, statsigOptions: i },
        );
      }
-@@ -177570,6 +177587,10 @@
+@@ -183173,6 +183190,10 @@
            };
          }
          async sendRequest(e, t, n) {
@@ -121,85 +121,90 @@
            if (
              !t.startsWith(`vscode://codex/`) &&
              t !== `/codex/dictation-stream-connect-info`
-@@ -185636,6 +185657,7 @@
-       UW(),
-       (rK = aA(Q, () => ({
-         queryKey: zW(`get-settings`),
+@@ -191029,6 +191050,7 @@
+       eK(),
+       (VK = Qk(X, () => ({
+         queryKey: XG(`get-settings`),
 +        retry: false,
          queryFn: () =>
-           i6?.settings?.readAll() ??
-           HW(`get-settings`, { responsePriority: eU() ? `critical` : void 0 }),
-@@ -185650,7 +185672,9 @@
+           e6?.settings?.readAll() ??
+           $G(`get-settings`, { responsePriority: lW() ? `critical` : void 0 }),
+@@ -191043,7 +191065,9 @@
        })),
-       (aK = X(Q, ({ get: e }) => {
-         let t = e(rK);
+       (UK = J(X, ({ get: e }) => {
+         let t = e(VK);
 -        return t.isLoading || t.isPlaceholderData;
 +        return (
 +          t.isLoading || t.isPlaceholderData || (t.isError && t.data == null)
 +        );
        })),
-       (gwn = X(Q, ({ get: e }) => e(rK).isError)),
-       (_wn = nA(
-@@ -186131,15 +186155,11 @@
+       (cAn = J(X, ({ get: e }) => e(VK).isError)),
+       (lAn = Yk(
+@@ -192342,15 +192366,11 @@
        try {
-         return await EK(e, t, n, r, !0);
+         return await Wq(e, t, n, r, !0);
        } catch (e) {
 -        return (
--          mf.error(`Failed to load layered config`, {
+-          zf.error(`Failed to load layered config`, {
 -            safe: {},
 -            sensitive: { error: e },
 -          }),
--          t.getQueryData([...MK, n, r]) ?? TTn
+-          t.getQueryData([...Yq, n, r]) ?? dMn
 -        );
-+        mf.error(`Failed to load layered config`, { safe: {}, sensitive: { error: e } });
++        zf.error(`Failed to load layered config`, { safe: {}, sensitive: { error: e } });
 +        throw e;
        }
      },
 +    retry: false,
-     staleTime: yU.FIVE_MINUTES,
+     staleTime: EW.FIVE_MINUTES,
    });
  }
-@@ -186152,6 +186172,7 @@
+@@ -192363,6 +192383,7 @@
          { includeLayers: i, cwd: r },
-         { ...Opn() },
+         { ...mbn() },
        ),
 +    retry: false,
      staleTime: 0,
    });
  }
-@@ -253607,7 +253628,7 @@
+@@ -261193,7 +261214,7 @@
    }))();
  }
- function tVr(e) {
--  return `${iVr}${rVr(e)}`;
-+  return rVr(e);
+ function tYr(e) {
+-  return `${iYr}${rYr(e)}`;
++  return rYr(e);
  }
- function nVr(e) {
-   return rVr(e);
-@@ -270972,15 +270993,18 @@
-   }))();
+ function nYr(e) {
+   return rYr(e);
+@@ -279808,15 +279829,22 @@
+   return (Kli = t(() => {}))();
  }
- async function dei() {
--  ((r6 = lei(sei)),
--    (i6 = await r6.services),
--    i6.threadReadState != null &&
--      (await sei.threadReadState.initialize(i6.threadReadState)),
--    i6.statsig != null && (await Fzt(i6.statsig)),
--    i6.clientCoordination != null && S6r(i6.clientCoordination),
--    i6.terminal != null && rBt(i6.terminal),
--    i6.devboxService);
-+  i6 = await window.__ELECTRON_SHIM__.configureAppHost(() => {
-+    const host = lei(sei);
-+    r6 = host;
-+    return { services: host.services, close: () => host[Symbol.dispose](), onBroken: callback => host.onRpcBroken(callback) };
+ async function qli() {
+-  (($3 = Uli(Vli)),
+-    (e6 = await $3.services),
+-    $3.onRpcBroken(Gli(e6.histogramCollector)),
+-    e6.threadReadState != null &&
+-      (await Vli.threadReadState.initialize(e6.threadReadState)),
+-    e6.statsig != null && (await ZWt(e6.statsig)),
+-    e6.clientCoordination != null && hii(e6.clientCoordination),
+-    e6.terminal != null && yGt(e6.terminal),
+-    e6.devboxService);
++  e6 = await window.__ELECTRON_SHIM__.configureAppHost(() => {
++    const host = Uli(Vli);
++    $3 = host;
++    let removeHistogram = () => {};
++    const services = host.services.then(services => {
++      removeHistogram = Gli(services.histogramCollector);
++      host.onRpcBroken(removeHistogram);
++      return services;
++    });
++    return { services, close: () => { removeHistogram(); host[Symbol.dispose](); }, onBroken: callback => host.onRpcBroken(callback) };
 +  });
-+  i6 = window.__ELECTRON_SHIM__.wrapBrowserServices(i6);
-+  if (i6.threadReadState != null) await sei.threadReadState.initialize(i6.threadReadState);
-+  if (i6.statsig != null) await Fzt(i6.statsig);
-+  if (i6.clientCoordination != null) S6r(i6.clientCoordination);
-+  if (i6.terminal != null) rBt(i6.terminal);
++  e6 = window.__ELECTRON_SHIM__.wrapBrowserServices(e6);
++  if (e6.threadReadState != null) await Vli.threadReadState.initialize(e6.threadReadState);
++  if (e6.statsig != null) await ZWt(e6.statsig);
++  if (e6.clientCoordination != null) hii(e6.clientCoordination);
++  if (e6.terminal != null) yGt(e6.terminal);
  }
-+
- var r6, i6;
- function a6() {
-   return (a6 = t(() => {
+ var $3, e6;
+ function t6() {

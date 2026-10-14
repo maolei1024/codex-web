@@ -1,20 +1,10 @@
---- a/.vite/build/bootstrap-yYZ8rgHq.js
-+++ b/.vite/build/bootstrap-yYZ8rgHq.js
-@@ -105387,6 +105387,7 @@
-   r && (o = +!!a);
-   let s = Et(n.version);
-   (Cxe({
+--- a/.vite/build/bootstrap-DOZRFVdo.js
++++ b/.vite/build/bootstrap-DOZRFVdo.js
+@@ -19758,6 +19758,7 @@
+   r && (s = +!!o);
+   let c = ve(n.version);
+   (uw({
 +    enabled: false,
-     ipcMode: O8.Classic,
-     dsn: P5.dsn,
-     transport: p5(Bxe(t)),
-@@ -111316,7 +111317,8 @@
-       safe: { packaged: p.app.isPackaged, platform: process.platform },
-     }),
-     p.app.exit(0));
--else {
-+else if (globalThis.__CODEX_WEB_STARTUP__ == null) {
-+  // The Web host invokes runMainAppStartup after installing its bridge.
-   sTe() &&
-     l
-       .n()
+     ipcMode: wx.Classic,
+     dsn: zw.dsn,
+     transport: zC(Nw(t)),

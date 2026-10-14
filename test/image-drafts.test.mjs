@@ -167,11 +167,11 @@ test("draft checkpoint reports attachments that are still being read", async () 
 
 test("Desktop composer mutations save images only when changed, including send/reset", async () => {
   const bundle = await readFile(
-    "scratch/asar/webview/assets/app-initial-60d038a052d7.js",
+    "scratch/asar/webview/assets/app-initial-1ab6fbe93c4f.js",
     "utf8",
   );
-  const start = bundle.indexOf("function rR(");
-  const end = bundle.indexOf("function Kur(", start);
+  const start = bundle.indexOf("function jV(");
+  const end = bundle.indexOf("function _Yr(", start);
   assert.ok(start > 0 && end > start);
   let state = {
     imageAttachments: [image],
@@ -190,19 +190,19 @@ test("Desktop composer mutations save images only when changed, including send/r
   const saved = [],
     home = [];
   const context = {
-    a9n: (_old, next) =>
+    HIr: (_old, next) =>
       next.imageAttachments.map((image) => `image:${image.id}`),
-    aL: (type, id) => `${type}:${id}`,
-    dR: "draft",
-    _R: "context",
-    gfr: "attachment",
-    mnr() {},
-    Enr() {},
-    mfr: "context",
-    fR: "view",
-    Xdr: "view",
-    Gdr: "home",
-    vWe: (value, update) => {
+    MB: (type, id) => `${type}:${id}`,
+    LV: "draft",
+    HV: "context",
+    UXr: "attachment",
+    Qzr() {},
+    uBr() {},
+    VXr: "context",
+    RV: "view",
+    SXr: "view",
+    bXr: "home",
+    Cme: (value, update) => {
       const next = {
         ...value,
         ...Object.fromEntries(
@@ -222,27 +222,27 @@ test("Desktop composer mutations save images only when changed, including send/r
           next[key] = old;
       return next;
     },
-    X7n: (scope) => scope.value.key,
-    fS: (value) => value.key,
+    NIr: (scope) => scope.value.key,
+    Uu: (value) => value.key,
     window: {
       __ELECTRON_SHIM__: {
         imageDrafts: { save: (key, images) => saved.push({ key, images }) },
       },
     },
-    L7n() {},
-    nR() {},
-    kur() {},
-    Q7n() {},
-    udr() {},
-    g7n() {},
-    pee() {},
-    Odr: "i",
-    sfr: "l",
-    cnr: "d",
-    Vdr: "u",
+    bIr() {},
+    AV() {},
+    qJr() {},
+    FIr() {},
+    FYr() {},
+    $Fr() {},
+    jme() {},
+    eXr: "i",
+    PXr: "l",
+    Kzr: "d",
+    gXr: "u",
   };
-  const { rR, Gur } = vm.runInNewContext(
-    `${bundle.slice(start, end)}; ({rR, Gur})`,
+  const { jV, gYr } = vm.runInNewContext(
+    `${bundle.slice(start, end)}; ({jV, gYr})`,
     context,
   );
   const scope = {
@@ -253,15 +253,15 @@ test("Desktop composer mutations save images only when changed, including send/r
       if (key === "home") home.push(third.images);
     },
   };
-  rR(scope, (next) => {
+  jV(scope, (next) => {
     next.prompt = "typing does not copy image data";
   });
   assert.equal(saved.length, 0);
-  rR(scope, (next) => {
+  jV(scope, (next) => {
     next.imageAttachments = [image, { ...image, id: "two" }];
   });
   assert.equal(saved.at(-1).images.length, 2);
-  Gur(scope);
+  gYr(scope);
   assert.equal(saved.at(-1).images.length, 0);
   assert.equal(home.at(-1).length, 0);
   assert.equal(state.imageAttachments.length, 0);

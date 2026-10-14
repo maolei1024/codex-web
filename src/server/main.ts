@@ -18,7 +18,6 @@ import fastifyMultipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import { installModuleAliasHook } from "./module";
 import { startupRecovery } from "./startup-recovery";
-import { glob } from "glob";
 import {
   assertTokenRequirement,
   installAuthHook,
@@ -1224,21 +1223,8 @@ export async function startIpcBridgeServer(
     version: packageJson.version,
   };
 
-  const matches = await glob("../../scratch/asar/.vite/build/main-*.js", {
-    nodir: true,
-    cwd: __dirname,
-  });
-
-  if (matches.length === 0) {
-    throw new Error("no main bundle found");
-  }
-
-  if (matches.length > 1) {
-    throw new Error("multiple main bundles found");
-  }
-
-  const module = require(matches[0]!);
-  module.runMainAppStartup();
+  // The Desktop entrypoint initializes network policy and starts the app once.
+  require(path.resolve(__dirname, "../../scratch/asar", packageJson.main));
   return app;
 }
 

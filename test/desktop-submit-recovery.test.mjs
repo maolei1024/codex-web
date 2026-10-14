@@ -4,11 +4,11 @@ import test from "node:test";
 import vm from "node:vm";
 
 const primary = await readFile(
-  "scratch/asar/webview/assets/app-primary-c9f7ac16cee9.js",
+  "scratch/asar/webview/assets/app-primary-2a670e99a60c.js",
   "utf8",
 );
 const initial = await readFile(
-  "scratch/asar/webview/assets/app-initial-60d038a052d7.js",
+  "scratch/asar/webview/assets/app-initial-1ab6fbe93c4f.js",
   "utf8",
 );
 const sentinel = Symbol.for("react.memo_cache_sentinel");
@@ -35,37 +35,41 @@ test("native early submit failure reports the error and releases its real submis
     started = 0;
   const expected = Error("[codex-web:transport] Configuration read timed out.");
   const context = {
-    wh: () => scope,
-    iT: {},
-    jw: {},
-    Aw: () => ({ getText: () => draft.text }),
-    SC: () => ({ modelSettings: { isLoading: false } }),
-    BS: () => null,
-    X: () => null,
-    gm: "account",
-    Em: "user",
-    HT: {},
-    uT: {},
-    Fy: {},
-    WX: {
+    ir: () => scope,
+    ic: {},
+    yE: {},
+    ck: () => ({ getText: () => draft.text }),
+    WD: () => ({ modelSettings: { isLoading: false } }),
+    Ih: () => null,
+    q: () => null,
+    wm: "account",
+    yg: "user",
+    yx: {},
+    gk: {},
+    YT: {},
+    AX: {
       use: () => null,
       useRef: (value) => ({ current: value }),
       useEffect() {},
     },
-    tm: (fn) => fn,
-    Gy: "submitting",
-    vOe: "accepted",
-    $Y: {},
-    QR: {},
-    Dw: {},
-    pot: { default: (fn) => fn },
-    oX: () => false,
-    cot: () => ({
+    rp: (fn) => fn,
+    TE: "submitting",
+    kwe: "accepted",
+    sI: {},
+    Gv: {},
+    bw: () => true,
+    Yg: {},
+    ur: () => false,
+    qR: {},
+    yy: {},
+    Qut: { default: (fn) => fn },
+    YY: () => false,
+    qut: () => ({
       isComposerSubmitting: false,
       queueAttachmentSubmit: () => false,
       queueLocalConfigSubmit: () => false,
     }),
-    rbe: () => ({
+    eTe: () => ({
       submit: async () => {
         assert.equal(state.get("submitting"), true);
         throw expected;
@@ -73,7 +77,7 @@ test("native early submit failure reports the error and releases its real submis
     }),
   };
   const hook = vm.runInNewContext(
-    `${nativeFunction("fot", /var pot[\s,]/)}; fot`,
+    `${nativeFunction("Zut", /var Qut[\s,]/)}; Zut`,
     context,
   );
   const { submitComposer } = hook({
@@ -122,19 +126,19 @@ test("native deferred submit cancels on config failure and cannot revive when co
     useEffect: (fn) => effects.push(fn),
   };
   const hook = vm.runInNewContext(
-    `${nativeFunction("aot", /var oot[\s,]/)}; aot`,
+    `${nativeFunction("Wut", /var Gut[\s,]/)}; Wut`,
     {
-      oot: { c: () => memo },
-      UX: hooks,
-      tm: (fn) => fn,
-      iT: {},
-      jT: "pending",
-      wh: () => ({
+      Gut: { c: () => memo },
+      kX: hooks,
+      rp: (fn) => fn,
+      ic: {},
+      Zy: "pending",
+      ir: () => ({
         set: (_key, value) => {
           pending = value;
         },
       }),
-      X: () => pending,
+      q: () => pending,
     },
   );
   let sent = 0,
@@ -177,23 +181,23 @@ test("native queued configuration errors remain rejected after displaying a toas
     toasts = [];
   let queued;
   const hook = vm.runInNewContext(
-    `${nativeFunction("cot", /function lot\(/)}; cot`,
+    `${nativeFunction("qut", /function Jut\(/)}; qut`,
     {
-      uot: { c: cache },
-      q: {},
-      Jwe: {},
-      Vm: {},
-      wh: () => ({
+      Yut: { c: cache },
+      J: {},
+      sIe: {},
+      ll: {},
+      ir: () => ({
         get: () => ({ danger: (message) => toasts.push(message) }),
       }),
-      X: () => false,
-      tot() {},
-      lot() {},
-      $f: (error) => error.message,
-      $at: async () => {
+      q: () => false,
+      But() {},
+      Jut() {},
+      oa: (error) => error.message,
+      Rut: async () => {
         throw expected;
       },
-      aot: (options) => {
+      Wut: (options) => {
         queued = options.onSubmitQueued;
         return {};
       },

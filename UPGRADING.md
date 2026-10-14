@@ -1,99 +1,57 @@
-# upgrading
+# Upgrading
 
-instructions for upgrading codex-web to point at a new version of upstream
-Codex Desktop.
+Use the existing checkout and a Git branch. Running services use separate deployed
+artifacts; preparing a build does not activate it. Keep Desktop and CLI versions
+explicit, and validate the actual local and SSH app-server transports together.
 
-## backing up
+## Release inputs
 
-we will start by generating a scratch directory and backing it up. first, let's
-get the `scratch` directory to a known state by running the following
+`local-build.json` is the single source for the Desktop version, archive SHA-256,
+CLI version, four platform archive hashes and browser asset namespace. Docker,
+Nix and `scripts/prepare` read this file. Give each changed browser build a new ID.
+Download the pinned official packages, verify the Desktop appcast signature and
+archive hashes, and update all manifest fields together. Do not silently follow
+`latest` or infer the Linux CLI version from a macOS executable.
 
-```bash
-rm -rf scratch scratch-backup # remove existing past scratch directories to start from clean state
-DEV=1 nix develop --command yarn run prepare:asar 
-mv scratch scratch-backup
-```
+## Porting extraction patches
 
-the `scratch-backup` directory holds the patched, working version of codex-web.
-we will use this when moving the patches over to the new version to understand
-the context the patches were being applied in.
+Create a task directory with `mktemp -d /tmp/codex-web-upgrade.XXXXXX` for downloaded
+packages, pristine extracted files and comparisons with the previous build.
+Keep generated working output in the checkout's ignored `scratch/` directory.
+Do not create permanent source copies or delete other tasks' scratch material.
 
-## updating urls
+Use the previous patches to understand each behavior, then port it to the new
+Desktop source. Review changed bundle names, native entrypoints, IPC transports,
+React hooks and compiled memoization slots. Generate patch files from actual
+before/after files with `diff`; do not hand-author their hunk offsets. Re-extract
+the pinned archive and run `scripts/prepare_asar` with `HOSTED_CODEX_APP_ZIP` set.
+Every patch must apply with the existing `--fuzz=0` setting. Update test extractors
+to exercise the new native code, without weakening the behavior assertions.
 
-there are a few places to update next.
+## Validation and release
 
-1. `appVersion` in default.nix and `hash` in `codexZip`.
-2. `APP_VERSION` in ./scripts/prepare
+Run `npm test` and the existing release-contract checks. Build and smoke-test both
+native Linux architectures. Test authenticated browser startup, real history,
+streaming and tools on local and SSH hosts, reconnection, independent tabs,
+notifications, image drafts, clipboard and downloads. Use isolated browser
+contexts and test state; do not overwrite production histories or user drafts.
+Check public HTTP/2 cold startup as well as the private network path.
 
-then temporarily comment out the patch lines in ./scripts/prepare_asar and run
+A push or manual pipeline on `main` builds and automatically deploys the cluster.
+Keep development work off `main` until the release window is ready. Use the
+machine's configured Git author and a Chinese conventional commit message.
 
-```bash
-DEV=1 nix develop --command yarn run prepare:asar 
-cp -r scratch scratch-new-version-unmodified
-```
+Before the approved cutover, establish that the affected app-servers have no
+active work, stop their writers, and create consistent backups on each host under
+`/backup/<UTC>-codex-web-upgrade/`, including configuration, state, startup
+materials and recoverable old binaries/images. Check capacity before creating
+backups. Include a restore manifest and retain backups until cleanup is agreed.
+Update both app-server and SSH proxy resolution to the pinned CLI version.
+Do not overwrite another instance's CODEX_HOME or restart unrelated Web services.
 
-## upgrading the codex-cli version
-
-this part can be run concurrently with the rest of the upgrade process. make
-sure to wait for its completion before doing validation. run it in a subagent.
-
-run the following to get the version of the new codex-cli
-
-```bash
-scratch/ChatGPT.app/Contents/Resources/codex --version
-```
-
-then update the `nix/codex/default.nix` file's `version` field and hashes to
-point to the new version.
-
-## porting over patches
-
-now we have a few folders
-
-* `scratch-backup`: patches applied on top of old version of Codex Desktop
-* `scratch-new-version-unmodified`: plain extracted new version of Codex Desktop
-* `scratch`: working copy we will be modifying
-
-now carefully look at the patches in `patches/` and how they were applied in
-`scratch-backup` and bring the changes over to `scratch`. apply them directly
-in-tree first. don't worry immediately about updating the patches yet.
-
-## updating patches
-
-once the patches have been made in `scratch`, diff the changes in `scratch`
-against `scratch-new-version-unmodified` and update the patches in `patches/`.
-always generate the patches by running `diff` and always avoid writing the
-patches manually as it's very easy to get them wrong.
-
-once that is done, uncomment the patch lines in `scripts/prepare_asar` and run
-
-```bash
-mv scratch scratch-patched-inplace
-rm -rf scratch
-DEV=1 nix develop --command yarn run prepare:asar 
-```
-
-then diff `./scratch-patched-inplace` with the resulting `./scratch` to validate
-the patches were applied as expected.
-
-## validation
-
-to validate things are still working, we'll first validate the server, then the
-client. before starting this step, make sure to wait for the
-`upgrading the codex-cli version` subagent to finish.
-
-to validate the server, run the following
-
-```bash
-nix develop --command yarn server
-```
-
-next validate the client by opening a browser window to `http://localhost:8214`
-and validating things show up on the page.
-
-look in the console for errors. also, look on the screen to see whether any
-error dialogs popped up. sometimes errors occur, but they're silent and exhibit
-as loading taking forever (more than 1m). look out for that case too.
-
-if there are errors, bring them to the users attention and we will decide how to
-proceed.
+Verify the CI commit, image index and platform digests, actual Pod imageID, running
+CLI executables and real browser behavior. Stop further cutovers on failure;
+there is no automatic rollback. A database migration may require the matching
+pre-upgrade state when restoring an old binary, so preserve post-upgrade changes
+before any restore. Remove task-owned temporary files and test processes, and
+report persistent changes and retained backups by host.

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import ts from "typescript";
+import { format } from "prettier";
 
 const directory = "scratch/asar/.vite/build/";
 const lazy = (initialize) => {
@@ -17,27 +18,29 @@ const lazy = (initialize) => {
 
 /** Use the fixed Desktop's sender, token encoder, size metadata and receiver. */
 export async function nativeChunkedRuntime() {
-  const [bootstrap, metadata, webview, main] = await Promise.all([
-    readFile(`${directory}bootstrap-yYZ8rgHq.js`, "utf8"),
-    readFile(`${directory}application-network-startup-DN7Ktmlk.js`, "utf8"),
-    readFile("scratch/asar/webview/assets/app-shared-59042e7300f7.js", "utf8"),
-    readFile(`${directory}main-C3nRcJ3D.js`, "utf8"),
+  const [nativeSource, metadata, webview, main] = await Promise.all([
+    readFile(`${directory}src-DCNiwad_.js`, "utf8").then((source) =>
+      format(source, { parser: "babel" }),
+    ),
+    readFile(`${directory}application-network-startup-YSC7OAs0.js`, "utf8"),
+    readFile("scratch/asar/webview/assets/app-shared-8340f229c2b3.js", "utf8"),
+    readFile(`${directory}main-CwxgTOle.js`, "utf8"),
   ]);
-  const metadataStart = metadata.indexOf("var Yo=");
-  const metadataEnd = metadata.indexOf("var ls=", metadataStart);
+  const metadataStart = metadata.indexOf("var Xo=");
+  const metadataEnd = metadata.indexOf("var us=", metadataStart);
   assert.ok(metadataStart > 0 && metadataEnd > metadataStart);
   const payloadHelpers = new Function(
-    `${metadata.slice(metadataStart, metadataEnd)}; return {S:es,x:cs,C:rs};`,
+    `${metadata.slice(metadataStart, metadataEnd)}; return {w:ts,T:is,C:ls};`,
   )();
-  const senderStart = bootstrap.indexOf("var MR = 64,");
-  const senderEnd = bootstrap.indexOf("var UR = [", senderStart);
+  const senderStart = nativeSource.indexOf("var vG = 64,");
+  const senderEnd = nativeSource.indexOf("var kG = [", senderStart);
   assert.ok(senderStart > 0 && senderEnd > senderStart);
   const Sender = new Function(
     "o",
-    "D",
+    "x",
     "setTimeout",
     "clearTimeout",
-    `const Be="codex-host-chunked-message-v1"; ${bootstrap.slice(senderStart, senderEnd)}; return VR;`,
+    `const le="codex-host-chunked-message-v1"; ${nativeSource.slice(senderStart, senderEnd)}; return DG;`,
   )(
     payloadHelpers,
     { randomUUID },
@@ -51,12 +54,12 @@ export async function nativeChunkedRuntime() {
     "t",
     `${webview.slice(receiverStart, receiverEnd)};g();return m;`,
   )(lazy);
-  const wrapperStart = main.indexOf("var Nie = 1e3,");
-  const wrapperEnd = main.indexOf("function Iie(", wrapperStart);
+  const wrapperStart = main.indexOf("var Gie = 1e3,");
+  const wrapperEnd = main.indexOf("function Jie(", wrapperStart);
   assert.ok(wrapperStart > 0 && wrapperEnd > wrapperStart);
   const wrapper = main
     .slice(wrapperStart, wrapperEnd)
-    .replace(/,\s*Fie = n\.F\(\[n\.N\(\), n\.D\(\)\.int\(\)\]\);\s*$/, ";");
+    .replace(/,\s*qie = n\.F\(\[n\.N\(\), n\.D\(\)\.int\(\)\]\);\s*$/, ";");
   return {
     Sender,
     Reassembler,
@@ -65,10 +68,11 @@ export async function nativeChunkedRuntime() {
       assert.match(wrapper, /__CODEX_WEB_RENDERERS__\.send/);
       const context = {
         __CODEX_WEB_RENDERERS__: hub,
-        m: { sr: Sender, Q: "codex_desktop:message-for-view" },
-        u: { i: () => () => ({ warning() {} }) },
+        i: { Bt: Sender },
+        g: { bt: "codex_desktop:message-for-view" },
+        f: { i: () => () => ({ warning() {} }) },
       };
-      const Wrapper = vm.runInNewContext(`${wrapper}; Pie`, context);
+      const Wrapper = vm.runInNewContext(`${wrapper}; Kie`, context);
       return new Wrapper(options);
     },
     createFetchBridge(hub, sender, handleVSCodeRequest) {
@@ -94,11 +98,11 @@ export async function nativeChunkedRuntime() {
           __CODEX_WEB_RENDERERS__: hub,
           AbortController,
           Error,
-          Hb: "dictation://test",
-          Vb: "vscode://codex/",
-          r: { Xn: () => false },
-          m: { Q: "codex_desktop:message-for-view" },
-          Jb: () => "test-error",
+          cle: "dictation://test",
+          sle: "vscode://codex/",
+          r: { In: () => false },
+          g: { bt: "codex_desktop:message-for-view" },
+          ox: () => "test-error",
         },
       );
       return new Bridge(

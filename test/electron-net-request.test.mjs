@@ -9,13 +9,13 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 const { net } = require("../src/server/electron/index.js");
 const source = await readFile(
-  "scratch/asar/.vite/build/main-C3nRcJ3D.js",
+  "scratch/asar/.vite/build/main-CwxgTOle.js",
   "utf8",
 );
-const start = source.indexOf("function YKe(");
-const end = source.indexOf("var XKe =", start);
+const start = source.indexOf("function dYe(");
+const end = source.indexOf("var fYe =", start);
 assert.ok(start > 0 && end > start, "pinned Desktop preview implementation");
-const preview = new Function("g", `${source.slice(start, end)}; return YKe;`)({
+const preview = new Function("_", `${source.slice(start, end)}; return dYe;`)({
   net,
 });
 

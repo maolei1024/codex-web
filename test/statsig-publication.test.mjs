@@ -5,11 +5,11 @@ import test from "node:test";
 
 test("Desktop feature publisher sends current SDK values without subscribing to readback", async () => {
   const bundle = await readFile(
-    "scratch/asar/webview/assets/app-initial-60d038a052d7.js",
+    "scratch/asar/webview/assets/app-initial-1ab6fbe93c4f.js",
     "utf8",
   );
-  const start = bundle.indexOf("function PPs(");
-  const end = bundle.indexOf("function FPs(", start);
+  const start = bundle.indexOf("function QZs(");
+  const end = bundle.indexOf("function $Zs(", start);
   assert.ok(start >= 0 && end > start, "pinned Desktop publisher must exist");
   const subscriptions = [],
     publications = [],
@@ -24,25 +24,25 @@ test("Desktop feature publisher sends current SDK values without subscribing to 
   };
   let cleanup;
   const context = {
-    qNs: {},
-    eee: (value) => value,
-    NXe: {},
-    Nu: {
+    pZs: {},
+    Xle: (value) => value,
+    pCe: {},
+    gr: {
       warning: (_message, details) => {
         throw details.sensitive.error;
       },
     },
-    IPs: { c: (size) => Array(size).fill(Symbol()) },
+    eQs: { c: (size) => Array(size).fill(Symbol()) },
     q: {},
-    Ah: () => store,
-    Al: (key) => {
+    Oi: () => store,
+    nn: (key) => {
       subscriptions.push(key);
       return [null, (value) => state.set(key, value)];
     },
     unusedSet: () => {
       assert.fail("atom setters also mount readback subscriptions");
     },
-    gd: (get, key) => {
+    Lc: (get, key) => {
       assert.notEqual(
         key,
         "statsig_evaluations",
@@ -50,30 +50,30 @@ test("Desktop feature publisher sends current SDK values without subscribing to 
       );
       return get(key);
     },
-    _s: {
+    Ho: {
       dispatchMessage: (type, event) => {
         assert.equal(type, "shared-object-set");
         assert.equal(event.key, "statsig_evaluations");
         publications.push(event.value);
       },
     },
-    LPs: { default: (a, b) => JSON.stringify(a) === JSON.stringify(b) },
-    RPs: {
+    tQs: { default: (a, b) => JSON.stringify(a) === JSON.stringify(b) },
+    nQs: {
       useRef: (current) => ({ current }),
       useLayoutEffect() {},
       useEffect: (fn) => {
         cleanup = fn();
       },
     },
-    wPs: () => snapshot,
-    kPs: async () => {},
-    FPs: (error) => {
+    XZs: () => snapshot,
+    xZs: async () => {},
+    $Zs: (error) => {
       throw error;
     },
-    m5r: (value) => value,
-    y5r: {},
-    zPs: { jsx: () => null },
-    ZNs() {},
+    ARi: (value) => value,
+    FRi: {},
+    rQs: { jsx: () => null },
+    _Zs() {},
   };
   const client = {
     loadingStatus: "Ready",
@@ -82,7 +82,7 @@ test("Desktop feature publisher sends current SDK values without subscribing to 
     off: (key) => listeners.delete(key),
   };
   const publish = vm.runInNewContext(
-    `${bundle.slice(start, end)}; PPs`,
+    `${bundle.slice(start, end)}; QZs`,
     context,
   );
   publish({ client });

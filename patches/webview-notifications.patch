@@ -1,42 +1,80 @@
---- a/webview/assets/app-initial-60d038a052d7.js
-+++ b/webview/assets/app-initial-60d038a052d7.js
-@@ -521394,6 +521394,11 @@
-   (Nu.info(`[desktop-notifications] service starting`), R6s());
+--- a/webview/assets/app-initial-1ab6fbe93c4f.js
++++ b/webview/assets/app-initial-1ab6fbe93c4f.js
+@@ -479322,7 +479322,7 @@
+       (t[0] = o),
+       (t[1] = f));
+   let p = f,
+-    m = p == null && (u || !0),
++    m = p == null && (u || !0) && !e.browserSettingsNarrow,
+     h = c && p == null,
+     g = p != null,
+     _;
+@@ -485109,7 +485109,7 @@
+   }))();
+ }
+ function IMs(e) {
+-  let t = (0, LMs.c)(22),
++  let t = (0, LMs.c)(23),
+     { children: n, legacyContentRef: r, requestNavigation: i, sidebar: a } = e,
+     o = Oi(ws),
+     s = (0, RMs.useContext)(Mni),
+@@ -485143,15 +485143,17 @@
+       (t[14] = d))
+     : (d = t[14]);
+   let f;
+-  t[15] !== a || t[16] !== u || t[17] !== d
++  t[15] !== a || t[16] !== u || t[17] !== d || t[22] !== e.browserSettingsNarrow
+     ? ((f = (0, T6.jsxs)(cDs, {
+         contextualNavigation: a,
++        browserSettingsNarrow: e.browserSettingsNarrow,
+         children: [null, l, u, d],
+       })),
+       (t[15] = a),
+       (t[16] = u),
+       (t[17] = d),
+-      (t[18] = f))
++      (t[18] = f),
++      (t[22] = e.browserSettingsNarrow))
+     : (f = t[18]);
+   let p;
+   return (
+@@ -529794,6 +529796,11 @@
+   (gr.info(`[desktop-notifications] service starting`), ulc());
    let { scope: n } = t,
      r = new AbortController();
 +  const browserNotifications = window.__ELECTRON_SHIM__?.notifications;
 +  const readBrowserCompletionSettings = () => ({
-+    turnMode: Pg(n.get, Qbe.turnMode) ?? `unfocused`,
-+    sound: Pg(n.get, Qbe.sound) ?? `default`,
++    turnMode: Rg(n.get, qge.turnMode) ?? `unfocused`,
++    sound: Rg(n.get, qge.sound) ?? `default`,
 +  });
    function i(t, i) {
-     return D6s(n, e, t, (t) =>
-       T6s(n, e, t.conversationId, (e) => {
-@@ -521459,7 +521464,10 @@
+     return $cc(n, e, t, (t) =>
+       Zcc(n, e, t.conversationId, (e) => {
+@@ -529859,7 +529866,10 @@
                  safe: { conversationId: t.conversationId, turnId: t.turnId },
                  sensitive: {},
                }),
--                d(s, r, I6s(n, e, t.conversationId, o)));
-+                d(s, r, I6s(n, e, t.conversationId, o), void 0, {
+-                d(s, r, clc(n, e, t.conversationId, o)));
++                d(s, r, clc(n, e, t.conversationId, o), void 0, {
 +                  turnId: t.turnId,
 +                  status: t.status,
 +                }));
              },
            ),
      c = i(
-@@ -521624,9 +521632,9 @@
+@@ -530024,9 +530034,9 @@
            d(o, r, () => a));
        },
      );
 -  function d(t, i, a, o) {
 +  function d(t, i, a, o, completedTurn) {
-     let s = t.conversationId == null ? null : eg(t.conversationId);
--    if (Se.notifications == null) return;
-+    if (Se.notifications == null && !(t.kind === `turn-complete` && browserNotifications)) return;
+     let s = t.conversationId == null ? null : Im(t.conversationId);
+-    if (Pd.notifications == null) return;
++    if (Pd.notifications == null && !(t.kind === `turn-complete` && browserNotifications)) return;
      let c = t.requestId,
        l = (e) => {
          try {
-@@ -521640,9 +521648,33 @@
+@@ -530041,9 +530051,33 @@
              ((t.kind === `permission` || t.kind === `question`) &&
                h(s, t.kind)) ||
              (t.kind === `agent-message` && p()) ||
@@ -63,15 +101,15 @@
 +                onOpen: () => originalNavigation,
 +                signal: r.signal,
 +              })).catch(() => {
-+                Nu.warning(`[browser-notifications] completion alert unavailable`, { safe: {}, sensitive: {} });
++                gr.warning(`[browser-notifications] completion alert unavailable`, { safe: {}, sensitive: {} });
 +              });
 +            }
 +            return;
 +          }
-           (Nu.info(`[desktop-notifications] show notification`, {
+           (gr.info(`[desktop-notifications] show notification`, {
              safe: {
                conversationId: t.conversationId,
-@@ -521672,7 +521704,7 @@
+@@ -530075,7 +530109,7 @@
        r?.threadSource === `chatgpt_hidden` ||
        r?.threadSource === `dreaming`
        ? !0
@@ -80,186 +118,146 @@
    }
    function p() {
      return t.getIsWindowFocused();
-@@ -521713,6 +521745,7 @@
+@@ -530116,6 +530150,7 @@
    };
  }
- function R6s() {
+ function ulc() {
 +  if (window.__ELECTRON_SHIM__?.notifications) return;
    try {
      if (typeof Notification > `u`) {
-       Nu.warning(`[desktop-notifications] Notification API missing`);
---- a/webview/assets/notifications-settings-624587a579c4.js
-+++ b/webview/assets/notifications-settings-624587a579c4.js
-@@ -64,6 +64,7 @@
-   win as W,
-   wtn as G,
-   xEt as K,
-+  yEt as getWebNotificationSetting,
-   zT as ve,
- } from "./app-shared-59042e7300f7.js";
- import {
-@@ -423,6 +424,7 @@
-   if (r[11] !== y || r[12] !== c || r[13] !== s) {
-     j = function (t) {
+       gr.warning(`[desktop-notifications] Notification API missing`);
+--- a/webview/assets/notifications-settings-4ed580c73dd0.js
++++ b/webview/assets/notifications-settings-4ed580c73dd0.js
+@@ -62,6 +62,7 @@
+   xjt as W,
+   y0t as G,
+   y2t as K,
++  yjt as getWebNotificationSetting,
+   yNt as ge,
+   ypt as _e,
+   zFt as ve,
+@@ -418,6 +419,7 @@
+   if (t[11] !== y || t[12] !== o || t[13] !== i) {
+     A = function (t) {
        if (y) return;
 +      void window.__ELECTRON_SHIM__?.notifications?.unlockAudio();
        p.current?.abort();
        let r = new AbortController();
        ((p.current = r),
-@@ -451,7 +453,7 @@
-         u = await o.importSound({
+@@ -446,7 +448,7 @@
+         l = await s.importSound({
            decodeAudio: async (e) => {
-             let t = await w(e);
--            return (t != null && ((l = !0), i(m(e, a), a)), t);
-+            return (t != null && ((l = !0), i(window.__ELECTRON_SHIM__?.notifications?.playBytes(e, a) ?? m(e, a), a)), t);
+             let t = await z(e);
+-            return (t != null && ((c = !0), r(N(e, a), a)), t);
++            return (t != null && ((c = !0), r(window.__ELECTRON_SHIM__?.notifications?.playBytes(e, a) ?? N(e, a), a)), t);
            },
-           title: c.formatMessage({
+           title: o.formatMessage({
              id: `notifications.sound.chooseTitle`,
-@@ -474,7 +476,7 @@
-       r == null ||
-         n.aborted ||
-         i(
--          r.previewSound(e, (e) => m(e, n)),
-+          r.previewSound(e, (e) => window.__ELECTRON_SHIM__?.notifications?.playBytes(e, n) ?? m(e, n)),
-           n,
+@@ -469,7 +471,7 @@
+       n == null ||
+         t.aborted ||
+         r(
+-          n.previewSound(e, (e) => N(e, t)),
++          n.previewSound(e, (e) => window.__ELECTRON_SHIM__?.notifications?.playBytes(e, t) ?? N(e, t)),
+           t,
          );
      }
-@@ -508,13 +510,18 @@
-       (r[15] = M),
-       (r[16] = N))
-     : ((M = r[15]), (N = r[16]));
+@@ -503,13 +505,18 @@
+       (t[15] = M),
+       (t[16] = P))
+     : ((M = t[15]), (P = t[16]));
 +  if (window.__ELECTRON_SHIM__?.notifications) {
-+    M = webNotificationText(c.locale, `完成提示音`, `Completion sound`);
-+    N = webNotificationText(c.locale, `前台也可播放，选择“无”可静音。`, `Plays while this page is active. Choose None to mute.`);
++    M = webNotificationText(o.locale, `完成提示音`, `Completion sound`);
++    P = webNotificationText(o.locale, `前台也可播放，选择“无”可静音。`, `Plays while this page is active. Choose None to mute.`);
 +  }
-   let P;
+   let F;
    return (
-     r[17] !== j ||
-     r[18] !== y ||
-     r[19] !== d ||
-     r[20] !== u?.platform ||
--    r[21] !== l
-+    r[21] !== l ||
+     t[17] !== A ||
+     t[18] !== y ||
+     t[19] !== u ||
+     t[20] !== l?.platform ||
+-    t[21] !== c
++    t[21] !== c ||
 +    window.__ELECTRON_SHIM__?.notifications
-       ? ((P = (0, X.jsx)(g, {
+       ? ((F = (0, X.jsx)(S, {
            label: M,
-           description: N,
-@@ -1331,7 +1338,7 @@
+           description: P,
+@@ -1326,7 +1333,7 @@
    );
  }
  function lt() {
--  let e = (0, dt.c)(90),
-+  let e = (0, dt.c)(91),
-     n = he(te),
-     o = ee(),
-     c = a(),
-@@ -1376,6 +1383,13 @@
-       (e[4] = n),
-       (e[5] = y))
-     : (y = e[5]);
+-  let e = (0, dt.c)(95),
++  let e = (0, dt.c)(96),
+     n = ee(te),
+     i = ie(),
+     a = r(),
+@@ -1373,6 +1380,13 @@
+       (e[6] = n),
+       (e[7] = b))
+     : (b = e[7]);
 +  const browserNotificationRef = (0, ft.useCallback)((element) => {
 +    window.__ELECTRON_SHIM__?.mountNotificationSettings?.(
 +      element,
-+      () => getWebNotificationSetting(n.get, T.sound) ?? `default`,
-+      o.locale,
++      () => getWebNotificationSetting(n.get, g.sound) ?? `default`,
++      i.locale,
 +    );
-+  }, [n, o.locale]);
-   let b = re(y),
-     x = ue(T.turnMode),
-     ne = ue(T.permissionsEnabled),
-@@ -1489,6 +1503,10 @@
-       (e[31] = ce),
-       (e[32] = le))
-     : ((ce = e[31]), (le = e[32]));
++  }, [n, i.locale]);
+   let x = de(b),
+     re = j(g.turnMode),
+     C = j(g.permissionsEnabled),
+@@ -1509,6 +1523,10 @@
+       (e[36] = H),
+       (e[37] = fe))
+     : ((H = e[36]), (fe = e[37]));
 +  if (window.__ELECTRON_SHIM__?.notifications) {
-+    ce = webNotificationText(o.locale, `完成时弹窗`, `Completion popup`);
-+    le = webNotificationText(o.locale, `选择系统通知的显示时机，不影响提示音。`, `Choose when to show a system notification. Sound is independent.`);
++    H = webNotificationText(i.locale, `完成时弹窗`, `Completion popup`);
++    fe = webNotificationText(i.locale, `选择系统通知的显示时机，不影响提示音。`, `Choose when to show a system notification. Sound is independent.`);
 +  }
-   let de = ae.find((e) => e.id === w)?.label,
-     R;
-   e[33] === de
-@@ -1534,7 +1552,7 @@
-       (e[42] = B))
-     : (B = e[42]);
-   let V;
--  e[43] !== f || e[44] !== z || e[45] !== B
-+  e[43] !== f || e[44] !== z || e[45] !== B || window.__ELECTRON_SHIM__?.notifications
-     ? ((V = (0, $.jsx)(g, {
-         label: ce,
-         description: le,
-@@ -1698,9 +1716,10 @@
-     e[85] !== ve ||
-     e[86] !== J ||
-     e[87] !== ke ||
--    e[88] !== Ae
-+    e[88] !== Ae ||
-+    e[90] !== browserNotificationRef
-       ? ((Me = (0, $.jsxs)($.Fragment, {
--          children: [se, V, ve, J, ke, Ae, je],
-+          children: [se, V, ve, J, ke, Ae, je, (0, $.jsx)(`div`, { ref: browserNotificationRef })],
+   let me = ue.find((e) => e.id === A)?.label,
+     U;
+   e[38] === me
+@@ -1554,7 +1572,7 @@
+       (e[47] = G))
+     : (G = e[47]);
+   let K;
+-  e[48] !== p || e[49] !== W || e[50] !== G
++  e[48] !== p || e[49] !== W || e[50] !== G || window.__ELECTRON_SHIM__?.notifications
+     ? ((K = (0, $.jsx)(S, {
+         label: H,
+         description: fe,
+@@ -1718,9 +1736,10 @@
+     e[90] !== be ||
+     e[91] !== De ||
+     e[92] !== Ne ||
+-    e[93] !== Ie
++    e[93] !== Ie ||
++    e[95] !== browserNotificationRef
+       ? ((Re = (0, $.jsxs)($.Fragment, {
+-          children: [V, K, be, De, Ne, Ie, Le],
++          children: [V, K, be, De, Ne, Ie, Le, (0, $.jsx)(`div`, { ref: browserNotificationRef })],
          })),
-         (e[83] = se),
-         (e[84] = V),
-@@ -1708,11 +1727,15 @@
-         (e[86] = J),
-         (e[87] = ke),
-         (e[88] = Ae),
--        (e[89] = Me))
-+        (e[89] = Me),
-+        (e[90] = browserNotificationRef))
-       : (Me = e[89]),
-     Me
+         (e[88] = V),
+         (e[89] = K),
+@@ -1728,11 +1747,15 @@
+         (e[91] = De),
+         (e[92] = Ne),
+         (e[93] = Ie),
+-        (e[94] = Re))
++        (e[94] = Re),
++        (e[95] = browserNotificationRef))
+       : (Re = e[94]),
+     Re
    );
  }
 +function webNotificationText(locale, chinese, english) {
 +  return /^zh(?:-|$)/i.test(locale ?? navigator.language) ? chinese : english;
 +}
  async function ut() {
-   return t.systemPermissions?.openNotificationSettings();
+   return E.systemPermissions?.openNotificationSettings();
  }
---- a/webview/assets/app-initial-60d038a052d7.js
-+++ b/webview/assets/app-initial-60d038a052d7.js
-@@ -468010,7 +468010,7 @@
-       (t[0] = o),
-       (t[1] = f));
-   let p = f,
--    m = p == null && (u || !0),
-+    m = p == null && (u || !0) && !e.browserSettingsNarrow,
-     h = c && p == null,
-     g = p != null,
-     _;
-@@ -473625,7 +473625,7 @@
-   }))();
- }
- function Tgs(e) {
--  let t = (0, Egs.c)(22),
-+  let t = (0, Egs.c)(23),
-     { children: n, legacyContentRef: r, requestNavigation: i, sidebar: a } = e,
-     o = Ah($s),
-     s = (0, Dgs.useContext)(ZV),
-@@ -473658,15 +473658,17 @@
-       (t[14] = d))
-     : (d = t[14]);
-   let f;
--  t[15] !== a || t[16] !== u || t[17] !== d
-+  t[15] !== a || t[16] !== u || t[17] !== d || t[22] !== e.browserSettingsNarrow
-     ? ((f = (0, J6.jsxs)(zus, {
-         contextualNavigation: a,
-+        browserSettingsNarrow: e.browserSettingsNarrow,
-         children: [null, l, u, d],
-       })),
-       (t[15] = a),
-       (t[16] = u),
-       (t[17] = d),
--      (t[18] = f))
-+      (t[18] = f),
-+      (t[22] = e.browserSettingsNarrow))
-     : (f = t[18]);
-   let p;
-   return (
---- a/webview/assets/settings-page-18f0a638496e.js
-+++ b/webview/assets/settings-page-18f0a638496e.js
-@@ -2335,8 +2335,59 @@
+--- a/webview/assets/settings-page-42af43aa985c.js
++++ b/webview/assets/settings-page-42af43aa985c.js
+@@ -2207,8 +2207,59 @@
        }));
    }))();
  }
@@ -278,9 +276,9 @@
 +}
 +function readDesktopSettingsViewport() { return false; }
 +function BrowserSettingsNarrowLayout({ children, sidebar, onBack, locale, navigationKey }) {
-+  const menu = Si.useRef(null);
++  const menu = li.useRef(null);
 +  const chinese = /^zh(?:-|$)/i.test(locale ?? navigator.language);
-+  Si.useEffect(() => { if (menu.current) menu.current.open = false; }, [navigationKey]);
++  li.useEffect(() => { if (menu.current) menu.current.open = false; }, [navigationKey]);
 +  return (0, $.jsxs)('div', {
 +    style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0 },
 +    children: [
@@ -313,38 +311,38 @@
 +    ],
 +  });
 +}
- function gi() {
--  let e = (0, xi.c)(143),
-+  const browserSettingsNarrow = Si.useSyncExternalStore(subscribeBrowserSettingsViewport, readBrowserSettingsViewport, readDesktopSettingsViewport);
-+  let e = (0, xi.c)(144),
-     t = Ve(fe),
-     n = (0, Si.useRef)(!1),
-     i;
-@@ -2896,19 +2947,24 @@
-       (e[130] = rt),
-       (e[131] = q))
-     : (q = e[131]);
+ function ri() {
+-  let e = (0, ci.c)(138),
++  const browserSettingsNarrow = li.useSyncExternalStore(subscribeBrowserSettingsViewport, readBrowserSettingsViewport, readDesktopSettingsViewport);
++  let e = (0, ci.c)(139),
+     t = ee(te),
+     n = (0, li.useRef)(!1),
+     r;
+@@ -2742,19 +2793,24 @@
+       (e[125] = G),
+       (e[126] = q))
+     : (q = e[126]);
 +  const browserSettingsContent = browserSettingsNarrow
-+    ? (0, $.jsx)(BrowserSettingsNarrowLayout, { sidebar: tt, onBack: je, locale: c.locale, navigationKey: nt, children: q })
++    ? (0, $.jsx)(BrowserSettingsNarrowLayout, { sidebar: Ye, onBack: we, locale: o.locale, navigationKey: W, children: q })
 +    : q;
    let J;
--  e[132] !== R || e[133] !== qe || e[134] !== tt || e[135] !== q
-+  e[132] !== R || e[133] !== qe || e[134] !== tt || e[135] !== q || e[143] !== browserSettingsNarrow || browserSettingsNarrow
-     ? ((J = (0, $.jsx)(Rt, {
-         legacyContentRef: qe,
-         requestNavigation: R,
-         sidebar: tt,
+-  e[127] !== F || e[128] !== ze || e[129] !== Ye || e[130] !== q
++  e[127] !== F || e[128] !== ze || e[129] !== Ye || e[130] !== q || e[138] !== browserSettingsNarrow || browserSettingsNarrow
+     ? ((J = (0, $.jsx)(Vt, {
+         legacyContentRef: ze,
+         requestNavigation: F,
+         sidebar: Ye,
 -        children: q,
 +        browserSettingsNarrow,
 +        children: browserSettingsContent,
        })),
-       (e[132] = R),
-       (e[133] = qe),
-       (e[134] = tt),
-       (e[135] = q),
--      (e[136] = J))
-+      (e[136] = J),
-+      (e[143] = browserSettingsNarrow))
-     : (J = e[136]);
+       (e[127] = F),
+       (e[128] = ze),
+       (e[129] = Ye),
+       (e[130] = q),
+-      (e[131] = J))
++      (e[131] = J),
++      (e[138] = browserSettingsNarrow))
+     : (J = e[131]);
    let Y;
-   e[137] === Symbol.for(`react.memo_cache_sentinel`)
+   e[132] === Symbol.for(`react.memo_cache_sentinel`)

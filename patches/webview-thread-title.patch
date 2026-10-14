@@ -1,14 +1,14 @@
---- a/webview/assets/local-conversation-thread-3f5a28c45846.js
-+++ b/webview/assets/local-conversation-thread-3f5a28c45846.js
-@@ -19218,6 +19218,11 @@
-   let D = ko(an),
-     O = (0, hj.useContext)(wh) === `activity`;
-   Z(ve, s ? { hostId: i, threadId: t } : null);
-+  const codexHostedWindowTitle = Z(te, { hostId: i, threadId: t });
-+  hj.useEffect(() => {
+--- a/webview/assets/local-conversation-thread-269c4ee9ddf0.js
++++ b/webview/assets/local-conversation-thread-269c4ee9ddf0.js
+@@ -18853,6 +18853,11 @@
+   let w = he(nn),
+     T = (0, $A.useContext)(hh) === `activity`;
+   X(Ua, s ? { hostId: i, threadId: t } : null);
++  const codexHostedWindowTitle = X(Un, { hostId: i, threadId: t });
++  $A.useEffect(() => {
 +    const title = codexHostedWindowTitle?.trim();
 +    if (title) document.title = `${title} | Codex`;
 +  }, [codexHostedWindowTitle]);
-   let k = Y(lh),
-     A = Z(Gu, t),
-     [j] = (0, hj.useState)(() => ({
+   let O = dt(Vn, { hostId: i, threadId: t }),
+     [k] = (0, $A.useState)(Symbol),
+     A = (0, $A.useCallback)(

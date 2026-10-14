@@ -1,23 +1,23 @@
---- a/.vite/build/main-C3nRcJ3D.js
-+++ b/.vite/build/main-C3nRcJ3D.js
-@@ -70213,6 +70213,7 @@
+--- a/.vite/build/main-CwxgTOle.js
++++ b/.vite/build/main-CwxgTOle.js
+@@ -72697,6 +72697,7 @@
    return JSON.stringify([e.hostId, e.threadId]);
  }
- var aL = class extends II {
+ var kL = class extends oL {
 +  readAll() { return globalThis.__CODEX_WEB_STARTUP__.singleFlight(this, () => super.readAll()); }
    store;
    afterWrite;
    statsig;
-@@ -70237,7 +70238,7 @@
+@@ -72721,7 +72722,7 @@
    }
    async getEffective(e, t) {
-     if (e === r.B.conversationDetailMode.key) {
+     if (e === r.R.conversationDetailMode.key) {
 -      let n = await this.statsig?.readExecutionAssignments(),
 +      let n = await globalThis.__CODEX_WEB_STARTUP__.displayAssignments(this.statsig),
          i =
            n == null
              ? void 0
-@@ -152627,7 +152628,7 @@
+@@ -156553,7 +156554,7 @@
          this.flushDownloadsStateBroadcasts()));
    }
    broadcastDownloadLifecycleEvent(e) {
@@ -26,8 +26,8 @@
        let n =
          this.downloadsLifecycleEventBroadcastQueues.get(t) ?? Promise.resolve();
        this.downloadsLifecycleEventBroadcastQueues.set(
-@@ -154272,38 +154273,35 @@
-       let n = new rje(this.executionHostRegistry, this.scopedState, e);
+@@ -158828,39 +158829,35 @@
+       let n = new aNe(this.executionHostRegistry, this.scopedState, e);
        return (this.fileDragServices.set(e, n), n);
      }
 -    async registerAppView(e, t) {
@@ -40,13 +40,14 @@
 +      if (!port) this.readyAppViewWebContentsIds.delete(e.id);
 +      const { clientCoordination, downloads } = await t.services;
        if (e.isDestroyed()) return;
--      let i = this.ipcClientsByWebContentsId.get(e.id);
--      (i?.removeViewServiceHandlers?.(),
--        i != null &&
--          (i.removeViewServiceHandlers = m.Ut({
--            hostId: s.h,
--            ipcClient: i.client,
+-      let a = this.ipcClientsByWebContentsId.get(e.id);
+-      (a?.removeViewServiceHandlers?.(),
+-        a != null &&
+-          (a.removeViewServiceHandlers = i._({
+-            hostId: l.h,
+-            ipcClient: a.client,
 -            viewService: n,
+-            registerThreadOwner: this.appServerManagersService == null,
 -            shouldForwardThreadReadState: async () => !1,
 -          })),
 -        this.options.appViewsByWebContentsId.set(e.id, t),
@@ -56,22 +57,22 @@
 -            this.readyAppViewWebContentsIds.delete(e.id));
 -        }),
 -        await this.appUpdatesViewPublisher.publish(e.id, t));
--      let a;
+-      let o;
 -      try {
--        a = await this.getDownloadsSnapshot();
+-        o = await this.getDownloadsSnapshot();
 -      } catch (e) {
--        W5.warning(`Failed to read native download history`, {
+-        Y5.warning(`Failed to read native download history`, {
 -          safe: {},
 -          sensitive: { error: e },
 -        });
 -        return;
 -      }
--      await r.stateChanged(a);
+-      await r.stateChanged(o);
 +      const client = this.ipcClientsByWebContentsId.get(e.id);
 +      let removeHandlers;
 +      if (client) {
 +        if (!port) client.removeViewServiceHandlers?.();
-+        const register = viewService => m.Ut({ hostId: s.h, ipcClient: client.client, viewService, shouldForwardThreadReadState: async () => false });
++        const register = viewService => i._({ hostId: l.h, ipcClient: client.client, viewService, registerThreadOwner: this.appServerManagersService == null, shouldForwardThreadReadState: async () => false });
 +        removeHandlers = port ? globalThis.__CODEX_WEB_STARTUP__.registerView(client.client, clientCoordination, register) : register(clientCoordination);
 +        if (!port) client.removeViewServiceHandlers = removeHandlers;
 +      }
@@ -92,21 +93,21 @@
      }
      broadcastAppUpdateState() {
        for (let [e, t] of this.options.appViewsByWebContentsId)
-@@ -155552,7 +155550,7 @@
-   return new s.jt(r, t, n).getRemoteMain();
+@@ -160026,7 +160023,7 @@
+   return new l.Mt(r, t, n).getRemoteMain();
  }
- var Xqe = class {
+ var EXe = class {
 -    encodingLevel = `structuredClonable`;
 +    encodingLevel = `jsonCompatible`;
      constructor(e) {
        ((this.#e = e),
          e.start(),
-@@ -156290,7 +156288,7 @@
-         n = l(e.sender),
+@@ -160763,7 +160760,7 @@
+         n = u(e.sender),
          r = n?.createAppHost(e.sender),
-         i = Yqe(t, r);
+         i = TXe(t, r);
 -      n?.registerAppView(e.sender, i).catch((e) => {
 +      n?.registerAppView(e.sender, i, t).catch((e) => {
-         u.n().warning(`Failed to register AppView RPC services`, {
+         f.n().warning(`Failed to register AppView RPC services`, {
            safe: {},
            sensitive: { error: e },

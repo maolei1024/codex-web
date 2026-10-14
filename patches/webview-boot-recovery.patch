@@ -1,11 +1,11 @@
---- a/webview/assets/app-main-f90d4d992dcc.js
-+++ b/webview/assets/app-main-f90d4d992dcc.js
+--- a/webview/assets/app-main-c87a8292e32d.js
++++ b/webview/assets/app-main-c87a8292e32d.js
 @@ -16,7 +16,7 @@
      ((l = window),
        l.__codexRoot ?? (l.__codexRoot = (0, s.createRoot)(c)),
        (u = l.__codexRoot),
--      o().then((e) => u.render(e)));
-+      (() => { const boot = () => o().then(e => u.render(e)).catch(() => window.__ELECTRON_SHIM__.bootFailed(boot)); boot(); })());
+-      a().then((e) => u.render(e)));
++      (() => { const boot = () => a().then(e => u.render(e)).catch(() => window.__ELECTRON_SHIM__.bootFailed(boot)); boot(); })());
    }))();
  }
  d();

@@ -8,28 +8,34 @@ export async function nativeRequestClient(
   appHost = { nativeRequest: (_method, operation) => operation() },
 ) {
   const source = await readFile(
-    "scratch/asar/webview/assets/app-shared-59042e7300f7.js",
+    "scratch/asar/webview/assets/app-shared-8340f229c2b3.js",
     "utf8",
   );
-  const start = /Bun\s*=\s*(class)/.exec(source);
+  const start = /Spn\s*=\s*(class)/.exec(source);
   const rest = source.slice(start?.index ?? 0);
-  const end = /\)?\s*,\s*\(?Vun\s*=\s*class/.exec(rest);
+  const end = /\)?\s*,\s*\(?Cpn\s*=\s*class/.exec(rest);
   assert.ok(start && end, "pinned Desktop request client must exist");
   const code = rest.slice(rest.indexOf("class"), end.index);
   const lifecycleMetrics = source.slice(
-    source.indexOf("function xun("),
-    source.indexOf("function Sun("),
+    source.indexOf("function rpn("),
+    source.indexOf("function ipn("),
   );
   const optionalConfig = source.slice(
-    source.indexOf("async function xen("),
-    source.indexOf("function Sen("),
+    source.indexOf("async function qin("),
+    source.indexOf("function Jin("),
   );
+  const normalizeConfig = source.slice(
+    source.indexOf("function zrn("),
+    source.indexOf("function DV("),
+  );
+  assert.ok(normalizeConfig, "pinned Desktop config normalization must exist");
   let sequence = 0;
   const errors = [];
   const context = {
-    wun: () => false,
-    xP: () => null,
-    _un: (_method, source) => source ?? "test",
+    zrn: vm.runInNewContext(`(${normalizeConfig})`),
+    opn: () => false,
+    OP: () => null,
+    $fn: (_method, source) => source ?? "test",
     window: {
       setTimeout,
       clearTimeout,
@@ -38,7 +44,7 @@ export async function nativeRequestClient(
     Date,
     DOMException,
     Error,
-    kun: {
+    dpn: {
       default: (fn, { normalizer }) => {
         const cache = new Map();
         const memo = (...args) => {
@@ -50,27 +56,27 @@ export async function nativeRequestClient(
         return memo;
       },
     },
-    xj: String,
-    sE: () => `native-${++sequence}`,
-    sun: (params) => params?.threadId,
-    Eun: (_method, options) => options?.priority ?? "interactive",
-    Tun: (_method, source) => source ?? "test",
-    PQt: (method) =>
+    jj: String,
+    JT: () => `native-${++sequence}`,
+    Ufn: (params) => params?.threadId,
+    cpn: (_method, options) => options?.priority ?? "interactive",
+    spn: (_method, source) => source ?? "test",
+    K0t: (method) =>
       ["thread/start", "turn/start", "turn/steer"].includes(method),
-    zun: new Set(),
-    Pun: { interactive: 64, background: 128, critical: 16 },
-    jun: 6,
-    Mun: 5,
-    Nun: 3,
-    Iun: 4,
-    Fun: 30_000,
-    mf: { debug() {}, warning() {}, error: (...args) => errors.push(args) },
-    p6() {},
-    o6: () => null,
-    Dun: (error) => error,
-    xun: vm.runInNewContext(`(${lifecycleMetrics})`),
-    Sun: () => Promise.resolve(),
-    SR: class extends Error {
+    xpn: new Set(),
+    gpn: { interactive: 64, background: 128, critical: 16 },
+    ppn: 6,
+    mpn: 5,
+    hpn: 3,
+    vpn: 4,
+    _pn: 30_000,
+    zf: { debug() {}, warning() {}, error: (...args) => errors.push(args) },
+    l6() {},
+    n6: () => null,
+    lpn: (error) => error,
+    rpn: vm.runInNewContext(`(${lifecycleMetrics})`),
+    ipn: () => Promise.resolve(),
+    lz: class extends Error {
       constructor(delivery, message) {
         super(message);
         this.delivery = delivery;
@@ -80,8 +86,8 @@ export async function nativeRequestClient(
   };
   const Client = vm.runInNewContext(`(${code})`, context);
   const readOptionalConfig = vm.runInNewContext(`(${optionalConfig})`, {
-    lN: () => false,
-    UB: (config) => config,
+    DM: () => false,
+    DV: (config) => config,
   });
   return {
     Client,

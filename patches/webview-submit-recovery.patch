@@ -1,6 +1,6 @@
---- a/webview/assets/app-primary-c9f7ac16cee9.js
-+++ b/webview/assets/app-primary-c9f7ac16cee9.js
-@@ -73882,7 +73882,11 @@
+--- a/webview/assets/app-primary-2a670e99a60c.js
++++ b/webview/assets/app-primary-2a670e99a60c.js
+@@ -75464,7 +75464,11 @@
          let t = () => {
            d.current.delete(e);
          };
@@ -8,35 +8,35 @@
 +        const pendingSubmit = l.current;
 +        i().then(t, () => {
 +          t();
-+          if (l.current === pendingSubmit) { l.current = null; c.set(jT, false); }
++          if (l.current === pendingSubmit) { l.current = null; c.set(Zy, false); }
 +        });
        }),
        (t[4] = r),
        (t[5] = i),
-@@ -74007,7 +74011,7 @@
+@@ -75589,7 +75593,7 @@
      : (f = t[2]);
    let p;
    t[3] !== i || t[4] !== a || t[5] !== l
--    ? ((p = () => $at(l, a, i).catch(lot)),
-+    ? ((p = () => $at(l, a, i).catch(error => { lot(error); l.get(Vm).danger(error?.message ?? String(error)); throw error; })),
+-    ? ((p = () => Rut(l, a, i).catch(Jut)),
++    ? ((p = () => Rut(l, a, i).catch(error => { Jut(error); l.get(ll).danger(error?.message ?? String(error)); throw error; })),
        (t[3] = i),
        (t[4] = a),
        (t[5] = l),
-@@ -74428,7 +74432,7 @@
-         l.aeonInitialization || l.serverInitialization != null
-           ? D([])
-           : rbe(o).submit(D)
+@@ -76029,7 +76033,7 @@
+         u.aeonInitialization || u.serverInitialization != null
+           ? A([])
+           : eTe(s).submit(A)
 -      ).finally(() => {
 +      ).catch(error => e.handleSubmitError(error)).finally(() => {
-         (x(),
-           S ||
-             (h?.restoreDraft(!h.retained),
-@@ -136447,7 +136451,7 @@
-   let ne =
+         (w(),
+           T ||
+             (v?.restoreDraft(!v.retained),
+@@ -140846,7 +140850,7 @@
+   let ie =
        g?.prefillPromptOnlyIfEmpty && g.prefillPrompt != null
          ? void 0
 -        : (g?.prefillPrompt ?? void 0),
-+        : (g?.prefillPrompt ?? N.get(`prompt`) ?? void 0),
-     re;
-   t[27] === m ? (re = t[28]) : ((re = op(m)), (t[27] = m), (t[28] = re));
-   let ie = re,
++        : (g?.prefillPrompt ?? F.get(`prompt`) ?? void 0),
+     ae;
+   t[41] === m ? (ae = t[42]) : ((ae = Wg(m)), (t[41] = m), (t[42] = ae));
+   let oe = ae,

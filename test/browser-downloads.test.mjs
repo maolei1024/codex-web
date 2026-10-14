@@ -299,7 +299,12 @@ test("clipboard service writes through the browser and preserves other methods",
   };
   const wrapped = wrapBrowserServices({ clipboard });
   await withBrowserGlobals(
-    { navigator: { clipboard: { writeText: async (text) => writes.push(text) } }, document: undefined },
+    {
+      navigator: {
+        clipboard: { writeText: async (text) => writes.push(text) },
+      },
+      document: undefined,
+    },
     async () => {
       assert.equal(wrapped.clipboard, wrapped.clipboard);
       assert.equal(wrapped.clipboard.marker, 42);
@@ -332,12 +337,10 @@ test("clipboard service falls back to a selected textarea when the Clipboard API
     },
     () => wrapped.clipboard.writeText("fallback text"),
   );
-  assert.deepEqual(events.map(([type]) => type), [
-    "append",
-    "focus",
-    "select",
-    "remove",
-  ]);
+  assert.deepEqual(
+    events.map(([type]) => type),
+    ["append", "focus", "select", "remove"],
+  );
 });
 
 test("clipboard service rejects when both browser copy paths fail", async () => {
@@ -365,11 +368,11 @@ test("clipboard service rejects when both browser copy paths fail", async () => 
 
 test("built Desktop service initialization and artifact analytics use browser adapter", async () => {
   const initial = await readFile(
-    "scratch/asar/webview/assets/app-shared-59042e7300f7.js",
+    "scratch/asar/webview/assets/app-shared-8340f229c2b3.js",
     "utf8",
   );
   const header = await readFile(
-    "scratch/asar/webview/assets/artifact-preview-header-a8f8d70ab2c5.js",
+    "scratch/asar/webview/assets/artifact-preview-header-13b90c4975d7.js",
     "utf8",
   );
   const preload = await readFile(
@@ -378,7 +381,7 @@ test("built Desktop service initialization and artifact analytics use browser ad
   );
   assert.match(
     initial,
-    /i6\s*=\s*window\.__ELECTRON_SHIM__\??\.wrapBrowserServices/,
+    /e6\s*=\s*window\.__ELECTRON_SHIM__\??\.wrapBrowserServices/,
   );
   assert.match(header, /downloadStarted/);
   assert.match(

@@ -4,11 +4,11 @@ import { setImmediate } from "node:timers/promises";
 import test from "node:test";
 
 const initial = await readFile(
-  "scratch/asar/webview/assets/app-initial-60d038a052d7.js",
+  "scratch/asar/webview/assets/app-initial-1ab6fbe93c4f.js",
   "utf8",
 );
 const shared = await readFile(
-  "scratch/asar/webview/assets/app-shared-59042e7300f7.js",
+  "scratch/asar/webview/assets/app-shared-8340f229c2b3.js",
   "utf8",
 );
 
@@ -26,16 +26,17 @@ function nativeFunction(name, next, source = initial) {
 // rather than a second implementation of its notification decision rules.
 const parseContent = new Function(
   "t",
-  `${nativeFunction("qAn", "JAn", shared)}
-   ${nativeFunction("sjn", "Wq", shared)}
-   Uq(); return sjn;`,
+  `${nativeFunction("Xmn", "Zmn", shared)}
+   ${nativeFunction("shn", "uhn", shared)}
+   ${nativeFunction("uhn", "eU", shared)}
+   $H(); return uhn;`,
 )((fn) => fn);
 const isAeon = new Function(
-  `${nativeFunction("YY", "XY", shared)}; return YY;`,
+  `${nativeFunction("iX", "aX", shared)}; return iX;`,
 )();
 const isSubagent = new Function(
-  "wz",
-  `${nativeFunction("hIr", "gIr", shared)}; return hIr;`,
+  "Ez",
+  `${nativeFunction("WUr", "GUr", shared)}; return WUr;`,
 )((source) => source);
 assert.ok(
   /\bJgt\s*=\s*`\/local`/.test(shared),
@@ -43,15 +44,15 @@ assert.ok(
 );
 const localPath = new Function(
   "Jgt",
-  `${nativeFunction("zht", "Bht", shared)}; return zht;`,
+  `${nativeFunction("Hht", "Uht", shared)}; return Hht;`,
 )("/local");
 const subscriptionSource = [
-  nativeFunction("D6s", "O6s"),
-  nativeFunction("T6s", "E6s"),
-  nativeFunction("I6s", "L6s"),
-  nativeFunction("L6s", "R6s"),
-  nativeFunction("R6s", "z6s"),
-  nativeFunction("z6s", "B6s"),
+  nativeFunction("$cc", "elc"),
+  nativeFunction("Zcc", "Qcc"),
+  nativeFunction("clc", "llc"),
+  nativeFunction("llc", "ulc"),
+  nativeFunction("ulc", "dlc"),
+  nativeFunction("dlc", "flc"),
 ].join("\n");
 
 function harness({
@@ -104,17 +105,17 @@ function harness({
         return Promise.resolve("granted");
       },
     },
-    H6s: null,
-    V6s: [],
+    mlc: null,
+    plc: [],
     AbortController,
     URLSearchParams,
-    Nu: Object.fromEntries(
+    gr: Object.fromEntries(
       ["info", "debug", "warning", "error"].map((level) => [
         level,
         (...args) => logs.push({ level, args }),
       ]),
     ),
-    hne(_scope, actualHost, connect, onEvent) {
+    Cwe(_scope, actualHost, connect, onEvent) {
       assert.equal(actualHost, hostId);
       return connect(
         {
@@ -132,35 +133,35 @@ function harness({
         onEvent,
       );
     },
-    E6s: async (_scope, actualHost, id) => {
+    Qcc: async (_scope, actualHost, id) => {
       assert.equal(actualHost, hostId);
       assert.equal(id, "thread-a");
       return conversation;
     },
-    P6s: () => () => {},
-    k6s: () => () => {},
-    A6s(_scope, actualHost, id, _mode, signal, run) {
+    olc: () => () => {},
+    tlc: () => () => {},
+    nlc(_scope, actualHost, id, _mode, signal, run) {
       assert.equal(actualHost, hostId);
       assert.equal(id, "thread-a");
       if (eligible && !signal.aborted) run();
     },
-    ps: isAeon,
-    w5a: () => false,
-    KZe: () => paused,
-    a$e: isSubagent,
-    pp: (value) => value?.title ?? null,
-    Hg: localPath,
-    eg: (value) => value,
-    rIe: parseContent,
-    Qbe: { turnMode: "turn-mode", sound: "sound" },
-    Pg(get, setting) {
+    ud: isAeon,
+    Zfi: () => false,
+    hNe: () => paused,
+    GFe: isSubagent,
+    Wre: (value) => value?.title ?? null,
+    Xu: localPath,
+    Im: (value) => value,
+    GAe: parseContent,
+    qge: { turnMode: "turn-mode", sound: "sound" },
+    Rg(get, setting) {
       settingReads.push(setting);
       return get(setting);
     },
-    $p: "user",
-    dh: "account",
-    Ds: "intl",
-    Se: {
+    Tp: "user",
+    Pg: "account",
+    Gd: "intl",
+    Pd: {
       notifications: {
         show(input, onOpen) {
           nativeShows.push({ input, onOpen });
@@ -168,7 +169,7 @@ function harness({
         hide() {},
       },
     },
-    zi: () => ({
+    pg: () => ({
       u(value) {
         return value;
       },
@@ -180,7 +181,7 @@ function harness({
   const names = Object.keys(context);
   const subscribe = new Function(
     ...names,
-    `${subscriptionSource}; return L6s;`,
+    `${subscriptionSource}; return llc;`,
   )(...names.map((key) => context[key]));
   const cleanup = subscribe(hostId, {
     scope,
