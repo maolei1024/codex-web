@@ -33,10 +33,23 @@ spec:
         - name: codex-web
           image: docker.nexus.ixuni.win/codex/web:latest
           imagePullPolicy: IfNotPresent
+          # Toolchains live on /data; keep the published image unchanged.
+          command: ["/usr/bin/tini", "--", "/bin/sh", "-c"]
+          args:
+            - 'if [ -r /data/tools/env.sh ]; then . /data/tools/env.sh; fi; exec /app/scripts/container-entrypoint "$@"'
+            - "--"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8214"
           ports:
             - name: http
               containerPort: 8214
           env:
+            - name: PATH
+              value: "/data/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            - name: BASH_ENV
+              value: "/data/tools/env.sh"
             - name: CODEX_WEB_TOKEN
               valueFrom:
                 secretKeyRef:

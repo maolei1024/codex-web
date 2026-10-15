@@ -344,6 +344,37 @@ The Web instance uses native SSH/app-server transport. Project files, task
 commands and MCP processes remain on the remote host. Existing services and
 conversation stores can continue running independently.
 
+### Persistent development tools
+
+The cluster's local tasks use toolchains under `/data/tools`, with stable commands
+in `/data/bin`. They are external to the image. Python 3.13 has a shared venv at
+`/data/tools/python/venv`; `python`, `python3`, `pip`, `pip3` and `uv` are available.
+An explicitly activated project venv takes precedence. Temurin JDK 8, 24 and 25
+coexist, with 25 as the default. Use `with-java 8 mvn package` for a single command,
+or `java8`, `java24`, `java25` and the corresponding `javac` commands. Go 1.27.2,
+Maven 3.10.0, curl, jq, zip and unzip are also provisioned. Runtime caches remain
+under the persistent home; changing Java for one command does not affect other tasks.
+
+`scripts/install-persistent-tools.py download --stage <task-temp-directory>`
+resolves publisher checksums and downloads a pinned `versions.json` bundle on a
+maintenance machine. Transfer that directory plus the provisioning scripts to a
+task-specific `/tmp` directory on ml256. After backing up the existing environment,
+run its `install --stage <directory> --data-dir
+/srv/k3s-local/project-codex-web/codex-web` action on the host as root. Then run
+`scripts/initialize-persistent-python.mjs` using Node inside the live container as
+UID 1000, before the installer's `activate` action. The installer's input is a
+trusted bundle; it checks hashes before extraction and refuses to replace an
+existing unmanaged installation or command. Replacing existing versions requires
+a separate backed-up upgrade, not an automatic startup download.
+
+The existing home `.profile` and `.bashrc` source `/data/tools/env.sh`.
+The Kubernetes command preserves `tini`, loads that same file before the original
+application entrypoint, and exports `BASH_ENV` for noninteractive Bash. The manifest
+also includes `/data/bin` in PATH for direct subprocesses. Deploy this configuration
+using the existing image tag when only provisioning tools; no image rebuild is
+required. Commands already present in older shell snapshots resolve through the
+stable `/data/bin` wrappers. SSH projects continue using their own host environment.
+
 ## Security
 
 run `codex-web` only on trusted networks. treat anyone who can reach the
