@@ -14,6 +14,34 @@ globalThis.window = {
 };
 const routes = await importTypescriptModule("src/browser/routes.ts");
 
+test("draft URLs retain their identity and host without consulting persisted history", async () => {
+  for (const pathname of [
+    "/thread/client-new-thread%3Adraft",
+    "/thread/client-new-thread:draft",
+  ]) {
+    assert.equal(routes.persistedThreadId(pathname), undefined);
+    assert.equal(
+      routes.mapBrowserPathToInitialRoute(pathname, "?hostId=remote-test")
+        .memoryPath,
+      "/local/client-new-thread:draft?hostId=remote-test",
+    );
+    assert.equal(
+      await routes.resolveLegacyThreadRoute(
+        pathname,
+        "",
+        ["local", "remote-test"],
+        async () => {
+          throw Error("draft has no persisted catalog entry");
+        },
+      ),
+      null,
+    );
+  }
+  assert.equal(routes.persistedThreadId("/thread/thread%2D1"), "thread-1");
+  assert.equal(routes.persistedThreadId("/thread/%invalid"), undefined);
+  assert.equal(routes.persistedThreadId("/"), undefined);
+});
+
 test("remote thread navigation and refresh preserve native host routing without retaining credentials", () => {
   const query =
     "?hostId=remote-ssh-discovered%3Atest&token=private&prompt=private";

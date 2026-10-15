@@ -1,6 +1,7 @@
 import {
   mapBrowserPathToInitialRoute,
   mapMemoryPathToBrowserPath,
+  persistedThreadId,
   resolveLegacyThreadRoute,
 } from "./routes";
 import {
@@ -222,11 +223,11 @@ let reconnectRecoveryTimeoutId: number | null = null;
 const reconnectRecovery = new ReconnectRecovery();
 const appHostRecovery = new AppHostRecovery(
   Date.now,
-  () => window.location.pathname.startsWith("/thread/"),
+  () => persistedThreadId(window.location.pathname) != null,
   () => ({
     hostId:
       new URLSearchParams(window.location.search).get("hostId") ?? "local",
-    threadId: window.location.pathname.match(/^\/thread\/([^/]+)/)?.[1],
+    threadId: persistedThreadId(window.location.pathname),
   }),
 );
 let retryBoot: (() => void) | undefined;

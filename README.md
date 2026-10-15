@@ -139,6 +139,9 @@ are not copied into thread URLs.
 Old bookmarks without a host are upgraded only when the native catalog identifies
 one matching host; explicit host choices are preserved and ambiguous matches are
 not guessed.
+New-chat `client-new-thread:` URLs keep their draft identity and do not query the
+persisted thread catalog or wait for history that does not exist yet. Persisted
+thread IDs are URL-decoded before matching foreground history responses.
 Before first render, authenticated IPC loads the native shared-state snapshot.
 Remote routes wait for their AppServer manager to register before mounting, so
 route suspension and layout callbacks cannot block the bootstrap that creates it.

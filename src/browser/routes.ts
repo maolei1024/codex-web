@@ -27,6 +27,18 @@ function threadHostSearch(search: string): string {
   return hostId ? `?${new URLSearchParams({ hostId }).toString()}` : "";
 }
 
+/** Draft routes are renderer identities, not persisted app-server threads. */
+export function persistedThreadId(pathname: string): string | undefined {
+  const match = pathname.match(/^\/thread\/([^/]+)$/);
+  if (!match) return undefined;
+  try {
+    const id = decodeURIComponent(match[1]);
+    return id.startsWith("client-new-thread:") ? undefined : id;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Migrate old Web bookmarks only when the native catalog proves ownership. */
 export async function resolveLegacyThreadRoute(
   pathname: string,
@@ -40,6 +52,7 @@ export async function resolveLegacyThreadRoute(
     }[]
   >,
 ) {
+  if (persistedThreadId(pathname) == null) return null;
   const route = mapBrowserPathToRoute(pathname, search);
   if (!route.startsWith("/local/") || threadHostSearch(search)) return null;
   const threadId = route.slice("/local/".length);

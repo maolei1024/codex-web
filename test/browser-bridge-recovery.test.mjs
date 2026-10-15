@@ -36,8 +36,17 @@ const shimSource = ts.transpileModule(
     },
   },
 ).outputText;
+const routesSource = ts.transpileModule(
+  await readFile("src/browser/routes.ts", "utf8"),
+  {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  },
+).outputText;
 
-function setup(t) {
+function setup(t, { pathname = "/", search = "" } = {}) {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 });
   const sockets = [],
     windowEvents = new Map(),
@@ -85,14 +94,20 @@ function setup(t) {
     location: {
       protocol: "https:",
       host: "example.test",
-      pathname: "/",
-      search: "",
+      pathname,
+      search,
     },
     history: {},
     setTimeout,
     clearTimeout,
     addEventListener: (type, fn) => windowEvents.set(type, fn),
   };
+  const routes = {};
+  vm.runInNewContext(routesSource, {
+    exports: routes,
+    window,
+    URLSearchParams,
+  });
   const exports = {};
   vm.runInNewContext(shimSource, {
     exports,
@@ -113,9 +128,7 @@ function setup(t) {
     require: (name) =>
       modules[name] ??
       {
-        "./routes": {
-          mapBrowserPathToInitialRoute: () => ({ memoryPath: "/" }),
-        },
+        "./routes": routes,
         "./files": {
           installBrowserFileUploadBridge() {},
           isLocalFilePickerMessage: () => false,
@@ -137,6 +150,94 @@ function setup(t) {
     pageshow: () => windowEvents.get("pageshow")({ persisted: true }),
   };
 }
+
+for (const encoded of [
+  "client-new-thread%3Adraft",
+  "client-new-thread:draft",
+]) {
+  test(`draft route ${encoded} becomes ready without a history request and survives recovery`, async (t) => {
+    const bridge = setup(t, { pathname: `/thread/${encoded}` });
+    const recovery = bridge.window.__ELECTRON_SHIM__.appHost;
+    const notices = [];
+    recovery.configure(
+      () => ({
+        services: Promise.resolve({
+          settings: { readAll: async () => ({}) },
+          startup: { whenReady: async () => {} },
+        }),
+        close() {},
+      }),
+      (state) => notices.push(state),
+    );
+    t.after(() => recovery.disconnect());
+    const services = await recovery.start();
+    await services.settings.readAll();
+    await services.startup.whenReady();
+    const configured = () => {
+      for (const method of [
+        "config/read",
+        "configRequirements/read",
+        "model/list",
+      ])
+        recovery.observeNative({ method, type: "completed" });
+    };
+    configured();
+    assert.equal(notices.at(-1), "connected");
+    assert.equal(recovery.diagnostics().stages.history, undefined);
+    recovery.disconnect();
+    await recovery.recover();
+    configured();
+    assert.equal(notices.at(-1), "connected");
+    t.mock.timers.tick(120_000);
+    recovery.checkDeadlines();
+    assert.equal(recovery.failed, false);
+    assert.equal(bridge.window.location.pathname, `/thread/${encoded}`);
+  });
+}
+
+test("persisted route recovery still waits for the decoded foreground history", async (t) => {
+  const bridge = setup(t, {
+    pathname: "/thread/thread%2D1",
+    search: "?hostId=remote-test",
+  });
+  const recovery = bridge.window.__ELECTRON_SHIM__.appHost;
+  const notices = [];
+  recovery.configure(
+    () => ({
+      services: Promise.resolve({
+        settings: { readAll: async () => ({}) },
+        startup: { whenReady: async () => {} },
+      }),
+      close() {},
+    }),
+    (state) => notices.push(state),
+  );
+  t.after(() => recovery.disconnect());
+  const services = await recovery.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    recovery.observeNative({
+      method,
+      hostId: "remote-test",
+      type: "completed",
+    });
+  assert.notEqual(notices.at(-1), "connected");
+  recovery.observeNative({
+    method: "thread/read",
+    hostId: "remote-test",
+    params: { threadId: "other" },
+    type: "completed",
+  });
+  assert.notEqual(notices.at(-1), "connected");
+  recovery.observeNative({
+    method: "thread/read",
+    hostId: "remote-test",
+    params: { threadId: "thread-1" },
+    type: "completed",
+  });
+  assert.equal(notices.at(-1), "connected");
+});
 
 async function clientFor(bridge) {
   const { client } = await nativeRequestClient((type, message) => {
