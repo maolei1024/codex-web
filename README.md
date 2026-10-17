@@ -14,8 +14,9 @@ override the parent of the `ChatGPT` project directory. Build output under
 `scratch/` and `src/server/` is generated and ignored. Keep historical versions
 in Git instead of copying the checkout to dated directories.
 
-For local development, run `npm ci` with Node 22 or later, `unzip`, `patch`, and
-the native build tools required by the dependencies installed. The prepare
+For local development, run `npm ci` with Node 22 or later, `unzip`, `patch`, Python
+with `tarfile.data_filter` (3.12+ or a distribution backport), and the native build
+tools required by the dependencies installed. The prepare
 lifecycle downloads and patches the pinned Desktop bundle. `npm test` builds
 the server and browser and runs the regression tests. A source update does not
 change an existing service deployment.
@@ -276,7 +277,9 @@ rather than opening an interactive prompt.
 
 ## Container and cluster deployment
 
-The container pins Node 22.22.0, Codex CLI 0.160.0 and the Desktop version above.
+The container pins Node 22.22.0, Codex CLI 0.162.1 and the Desktop version above.
+The build stage uses Python 3.12.15 for the archive safety tests; build and runtime
+both use Bookworm to keep native Node addons compatible.
 Its native amd64 and arm64 builds run `npm test` and a packaged runtime smoke
 check before publication. Woodpecker builds on `main` push/manual, publishes
 `docker.nexus.ixuni.win/codex/web:build-N`, and applies `k8s/codex-web.yaml`.
