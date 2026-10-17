@@ -26,7 +26,110 @@
          constructor(e) {
            ((this.#e = e),
              e.start(),
-@@ -174417,9 +174418,13 @@
+@@ -131422,7 +131423,10 @@
+         #p;
+         #m;
+         #h;
++        #transportGeneration = 0;
++        #transportDetached = false;
+         async initialize(e) {
++          const generation = this.#transportGeneration;
+           try {
+             var t = GI();
+             ((this.#e = e),
+@@ -131432,8 +131436,12 @@
+               this.#x());
+             let n = t.u(await e.getExecutionHostKeys());
+             if (this.#d) return;
+-            ((this.#c = n), this.#y());
++            if (!this.#transportDetached && generation === this.#transportGeneration) {
++              this.#c = n;
++              this.#y();
++            }
+             let r = YRt(wI)[lR];
++            this.#p?.();
+             ((this.#f = Vu(z(), V(z())).safeParse(r).data),
+               (this.#p = Hf.subscribe(
+                 `mcp-notification`,
+@@ -131468,12 +131476,14 @@
+           return this.#c;
+         }
+         async refreshMissingHostKeys(e) {
++          const generation = this.#transportGeneration;
++          if (this.#transportDetached) return;
+           if (this.#e != null && this.#c != null && e.length !== 0)
+             try {
+               try {
+                 var t = GI();
+                 let n = t.u(await this.#e.getExecutionHostKeys());
+-                if (this.#d) return;
++                if (this.#d || this.#transportDetached || generation !== this.#transportGeneration) return;
+                 let r = e.filter((e) => this.#c?.[e] == null && n[e] != null);
+                 if (r.length === 0) return;
+                 ((this.#c = {
+@@ -131575,30 +131585,52 @@
+             }
+           );
+         };
++        // The read-state store belongs to the page, while its RPC lease belongs
++        // to one AppHost connection. Keep listeners and identity guards intact.
++        disconnectTransport() {
++          this.#transportGeneration++;
++          this.#transportDetached = true;
++          const session = this.#t;
++          this.#t = void 0;
++          this.#l = void 0;
++          this.#u = false;
++          session?.dispose();
++        }
++        reconnectTransport() {
++          this.#transportDetached = false;
++          return this.refresh();
++        }
+         refresh() {
+-          return this.#d
+-            ? Promise.resolve()
+-            : ((this.#l ??= this.#g().finally(() => {
+-                ((this.#l = void 0),
+-                  this.#u && ((this.#u = !1), this.refresh()));
+-              })),
+-              this.#l);
++          if (this.#d || this.#transportDetached) return Promise.resolve();
++          if (this.#l != null) return this.#l;
++          const generation = this.#transportGeneration;
++          const task = this.#g().finally(() => {
++            if (generation !== this.#transportGeneration || this.#l !== task) return;
++            this.#l = void 0;
++            if (this.#u) {
++              this.#u = false;
++              this.refresh();
++            }
++          });
++          return this.#l = task;
+         }
+         async #g() {
+-          if (this.#e == null || this.#t != null) return;
++          if (this.#e == null || this.#t != null || this.#transportDetached) return;
++          const generation = this.#transportGeneration;
+           let e = this.#o,
+             t = this.#c,
+             n = [],
+             r;
+           try {
+             let i = await this.#e.open((e) => {
++              if (this.#d || generation !== this.#transportGeneration) return;
+               r == null ? n.push(e) : this.#_(r, e);
+             }, this.#f);
+             if (i.status !== `ready`) {
+               i[Symbol.dispose]();
+               return;
+             }
+-            if (this.#d || e !== this.#o) {
++            if (this.#d || e !== this.#o || generation !== this.#transportGeneration) {
+               i[Symbol.dispose]();
+               return;
+             }
+@@ -174416,9 +174448,13 @@
                zf.error(`Received app server error`, {
                  safe: {},
                  sensitive: { id: e, error: t },
@@ -41,7 +144,7 @@
            if (this.dispatchMessage == null)
              throw Error(
                `AppServerRequestClient is missing a message dispatcher`,
-@@ -174880,7 +174885,7 @@
+@@ -174876,7 +174912,7 @@
              return;
            }
            let n = Date.now(),
@@ -50,7 +153,7 @@
            (zf.warning(`mcp_request_timeout`, {
              safe: {
                requestId: e,
-@@ -174943,6 +174948,7 @@
+@@ -174939,6 +174975,7 @@
              }));
          }
          emitRequestLifecycleEvent(e) {
@@ -58,7 +161,7 @@
            for (let t of this.requestLifecycleListeners)
              try {
                t(e);
-@@ -180786,19 +180792,23 @@
+@@ -180782,19 +180819,23 @@
        (e.useStatsigInternalClientFactoryAsync = void 0));
      var t = qL(),
        n = o();
@@ -94,7 +197,7 @@
      }
      e.useStatsigInternalClientFactoryAsync = r;
    }),
-@@ -180809,7 +180819,14 @@
+@@ -180805,7 +180846,14 @@
        n = $vn();
      function r(e, r, i = null) {
        return (0, n.useStatsigInternalClientFactoryAsync)(
@@ -110,7 +213,7 @@
          { sdkKey: e, initialUser: r, statsigOptions: i },
        );
      }
-@@ -183173,6 +183190,10 @@
+@@ -183169,6 +183217,10 @@
            };
          }
          async sendRequest(e, t, n) {
@@ -121,7 +224,7 @@
            if (
              !t.startsWith(`vscode://codex/`) &&
              t !== `/codex/dictation-stream-connect-info`
-@@ -191029,6 +191050,7 @@
+@@ -191025,6 +191077,7 @@
        eK(),
        (VK = Qk(X, () => ({
          queryKey: XG(`get-settings`),
@@ -129,7 +232,7 @@
          queryFn: () =>
            e6?.settings?.readAll() ??
            $G(`get-settings`, { responsePriority: lW() ? `critical` : void 0 }),
-@@ -191043,7 +191065,9 @@
+@@ -191039,7 +191092,9 @@
        })),
        (UK = J(X, ({ get: e }) => {
          let t = e(VK);
@@ -140,7 +243,7 @@
        })),
        (cAn = J(X, ({ get: e }) => e(VK).isError)),
        (lAn = Yk(
-@@ -192342,15 +192366,11 @@
+@@ -192338,15 +192393,11 @@
        try {
          return await Wq(e, t, n, r, !0);
        } catch (e) {
@@ -159,7 +262,7 @@
      staleTime: EW.FIVE_MINUTES,
    });
  }
-@@ -192363,6 +192383,7 @@
+@@ -192359,6 +192410,7 @@
          { includeLayers: i, cwd: r },
          { ...mbn() },
        ),
@@ -167,7 +270,7 @@
      staleTime: 0,
    });
  }
-@@ -261193,7 +261214,7 @@
+@@ -261189,7 +261241,7 @@
    }))();
  }
  function tYr(e) {
@@ -176,7 +279,7 @@
  }
  function nYr(e) {
    return rYr(e);
-@@ -279808,15 +279829,22 @@
+@@ -279804,17 +279856,45 @@
    return (Kli = t(() => {}))();
  }
  async function qli() {
@@ -189,8 +292,25 @@
 -    e6.clientCoordination != null && hii(e6.clientCoordination),
 -    e6.terminal != null && yGt(e6.terminal),
 -    e6.devboxService);
++  const readState = Vli.threadReadState;
++  let initialized = false, connected = true;
++  readStateRecoveryCleanup?.();
++  const removeDisconnect = window.__ELECTRON_SHIM__.appHost.onDisconnected(() => {
++    connected = false;
++    readState.disconnectTransport();
++  });
++  const removeRestore = window.__ELECTRON_SHIM__.appHost.onRestored(() => {
++    connected = true;
++    if (initialized) void readState.reconnectTransport();
++  });
++  readStateRecoveryCleanup = () => { removeDisconnect(); removeRestore(); };
 +  e6 = await window.__ELECTRON_SHIM__.configureAppHost(() => {
-+    const host = Uli(Vli);
++    // Native RPC disposes its root when this channel closes. Vli and its
++    // read-state store are page-owned and must outlive every such channel.
++    const root = new (class extends vF {
++      get services() { return Vli.services; }
++    })();
++    const host = Uli(root);
 +    $3 = host;
 +    let removeHistogram = () => {};
 +    const services = host.services.then(services => {
@@ -201,10 +321,17 @@
 +    return { services, close: () => { removeHistogram(); host[Symbol.dispose](); }, onBroken: callback => host.onRpcBroken(callback) };
 +  });
 +  e6 = window.__ELECTRON_SHIM__.wrapBrowserServices(e6);
-+  if (e6.threadReadState != null) await Vli.threadReadState.initialize(e6.threadReadState);
++  if (e6.threadReadState != null) {
++    await readState.initialize(e6.threadReadState);
++    initialized = true;
++    if (connected) void readState.reconnectTransport();
++  }
 +  if (e6.statsig != null) await ZWt(e6.statsig);
 +  if (e6.clientCoordination != null) hii(e6.clientCoordination);
 +  if (e6.terminal != null) yGt(e6.terminal);
  }
- var $3, e6;
+-var $3, e6;
++var $3, e6, readStateRecoveryCleanup;
  function t6() {
+   return (t6 = t(() => {
+     ($Wt(), DGt(), Hli(), xii(), Wli(), Kli());

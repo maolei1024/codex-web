@@ -897,6 +897,11 @@ class Tray {
 }
 
 class Notification {
+  static isSupported(): boolean {
+    // The Web host has no native OS notification service.
+    return false;
+  }
+
   constructor(...args: unknown[]) {
     log("new Notification", args);
   }

@@ -52,6 +52,7 @@ const READS = new Set([
   "localThreadCatalog.readEntries",
   "localThreadCatalog.readStatus",
   "pinnedThreads.list",
+  "threadReadState.getExecutionHostKeys",
 ]);
 const NATIVE_READS = new Set([
   "config/read",

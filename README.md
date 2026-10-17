@@ -6,7 +6,7 @@ This is the maintained [maolei1024 fork](https://github.com/maolei1024/codex-web
 of [0xcaff/codex-web](https://github.com/0xcaff/codex-web). It includes token and
 cookie authentication, bounded uploads, browser downloads, mobile layout and
 reconnection improvements, and compressed, versioned assets. The Desktop bundle
-is pinned to `26.930.21537`; the host supplies the Codex CLI.
+is pinned to `26.1007.71326`; the host supplies the Codex CLI.
 
 Use one source checkout. User projects belong in `~/ChatGPT`, and credentials
 belong in the service environment outside Git. `CODEX_WEB_DOCUMENTS_DIR` can
@@ -104,6 +104,10 @@ replayed. Required configuration errors remain errors, with a retry notice outsi
 the React tree. Recovery retains the route, rendered history, editor and attachments;
 it does not remount the app or simulate a page refresh. Each browser channel owns its
 callback lifetime, so closing one tab cannot unregister another tab's callbacks.
+The renderer's thread read-state store and listeners belong to the page, not to
+an AppHost channel. Reconnection replaces only its RPC lease and ignores old
+callbacks and snapshots. Account and execution-host changes still invalidate old
+handles. Side-chat cleanup can therefore finish after a transport reconnect.
 During initial startup, idle gaps between read batches waiting for lazy UI assets
 pause the remaining budget, including gaps after configuration has loaded. Any
 startup read resumes that same budget; outstanding RPCs and retries remain bounded.
