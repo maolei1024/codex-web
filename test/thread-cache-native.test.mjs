@@ -364,3 +364,70 @@ test("reconnection during a cache read reacquires a ticket and persists fresh na
   off();
   f.dispose();
 });
+test("a late corrupt read only invalidates its original identity namespace", async () => {
+  let release;
+  const delayDecode = new Promise((r) => {
+    release = r;
+  });
+  const f = setup({ delayDecode });
+  await f.seed();
+  const original = await f.store.readPages(f.key);
+  const page = original.pages[0];
+  await f.store.savePages(
+    f.key,
+    original.ticket,
+    [{ ...page, json: "invalid" }],
+    [page.id],
+  );
+  const off = f.listen();
+  await pause(20);
+  f.identity("account-two");
+  const nextKey = f.key.replace("account-one", "account-two");
+  const next = await f.store.readPages(nextKey);
+  await f.store.savePages(nextKey, next.ticket, [page], [page.id]);
+  release();
+  await until(() => f.cache.diagnostics().hits === 1);
+  assert.equal((await f.store.readPages(nextKey)).pages.length, 1);
+  off();
+  f.dispose();
+});
+test("history removal updates retained page IDs even when remaining messages are unchanged", async () => {
+  const f = setup();
+  const kept = turn("kept");
+  const removed = { ...turn("removed"), turnId: "removed-turn" };
+  const off = f.listen();
+  await pause(20);
+  f.set("thread", state([kept, removed], "resumed"));
+  await until(() => f.cache.diagnostics().writes === 1);
+  f.set("thread", state([kept], "resumed"));
+  f.emit("complete", { conversationId: "thread" });
+  await until(() => f.cache.diagnostics().writes === 2);
+  const saved = await f.store.readPages(f.key);
+  assert.deepEqual(
+    saved.pages.map((p) => p.id),
+    ["turn-one:page:0"],
+  );
+  off();
+  f.dispose();
+});
+test("an authoritative empty history replaces cached text and permits subsequent new messages", async () => {
+  const f = setup();
+  await f.seed();
+  const off = f.listen();
+  await until(() => f.cache.diagnostics().hits === 1);
+  f.set("thread", state([], "resumed"));
+  await until(() => f.cache.diagnostics().writes === 1);
+  assert.equal(f.latest.value.turnEntityKeys.length, 0);
+  assert.equal(f.cache.diagnostics().syncing, 0);
+  assert.equal((await f.store.readPages(f.key)).pages.length, 0);
+  f.set("thread", state([turn("new after clearing")], "resumed"));
+  f.emit("complete", { conversationId: "thread" });
+  await until(() => f.cache.diagnostics().writes === 2);
+  const saved = await f.store.readPages(f.key);
+  assert.equal(
+    m.decodePage(saved.pages[0]).items[0].text,
+    "new after clearing",
+  );
+  off();
+  f.dispose();
+});

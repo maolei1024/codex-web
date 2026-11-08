@@ -366,3 +366,39 @@ test("storage error listeners can refresh usage without recursively retrying sto
   assert.equal(notifications, 1);
   store.close();
 });
+test("a refreshed tail removes reverted pages and drops an unconfirmed prefix", async () => {
+  const { store } = fixture();
+  const old = Array.from({ length: 12 }, (_, i) =>
+    page(`turn-${i}:page:0`, 100, i),
+  );
+  await write(store, "a", old);
+  const tail = old.slice(6, 11).map((p, order) => ({ ...p, order }));
+  let ticket = (await store.readPages("a")).ticket;
+  await store.savePages(
+    "a",
+    ticket,
+    tail,
+    tail.map((p) => p.id),
+    true,
+  );
+  let saved = await store.readPages("a");
+  assert.deepEqual(
+    saved.pages.map((p) => p.id),
+    old.slice(0, 11).map((p) => p.id),
+  );
+  ticket = saved.ticket;
+  const rewritten = [page("replacement:page:0")];
+  await store.savePages(
+    "a",
+    ticket,
+    rewritten,
+    rewritten.map((p) => p.id),
+    true,
+  );
+  saved = await store.readPages("a");
+  assert.deepEqual(
+    saved.pages.map((p) => p.id),
+    ["replacement:page:0"],
+  );
+  store.close();
+});

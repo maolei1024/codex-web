@@ -34,6 +34,7 @@ type View = {
   timer?: ReturnType<typeof setTimeout>;
   lastWrite: number;
   saved: Map<string, { items: any[]; details: any; order: number }>;
+  hasSnapshot: boolean;
 };
 type Codec = (operation: "encode" | "decode", page: any) => Promise<any>;
 
@@ -241,6 +242,7 @@ export function createThreadCache(
         view.ticket = undefined;
         view.readAgain = false;
         view.saved.clear();
+        view.hasSnapshot = false;
         clearTimeout(view.timer);
         view.timer = undefined;
         view.pending = false;
@@ -270,6 +272,12 @@ export function createThreadCache(
         const display = live ?? native.placeholder?.(id, view.metadata);
         if (!display) return live;
         const turns = live ? native.turns(live) : [];
+        if (
+          live?.resumeState === "resumed" &&
+          !turns.length &&
+          native.complete(live)
+        )
+          return live;
         // During native pagination only prepend a cached prefix with a matching
         // boundary. Every overlapping turn/message comes from current memory.
         let shown = view.cached;
@@ -310,7 +318,12 @@ export function createThreadCache(
           const state = projected(id);
           update = state ? native.transcript(state) : originalTranscript(id);
           const live = originalConversation(id);
-          if (live && native.turns(live).length && view.olderRequest == null) {
+          if (
+            live &&
+            (native.turns(live).length ||
+              (live.resumeState === "resumed" && native.complete(live))) &&
+            view.olderRequest == null
+          ) {
             setCached(view);
             view.usedProjection = false;
           }
@@ -321,11 +334,12 @@ export function createThreadCache(
         if (view.reading || !scope || disposed) return;
         view.reading = true;
         const generation = view.generation,
-          connectionAtStart = connection;
+          connectionAtStart = connection,
+          key = view.key;
         const before = manager.getConversation(view.id);
         const beforeTurns = before && native.turns(before);
         try {
-          const result = await store.readPages(view.key, view.lease, 5);
+          const result = await store.readPages(key, view.lease, 5);
           if (
             !result ||
             generation !== view.generation ||
@@ -350,7 +364,7 @@ export function createThreadCache(
           }
           const pages: TurnPage[] = [];
           for (const page of tail) pages.push(await codec("decode", page));
-          const valid = await store.validTicket(view.key, result.ticket);
+          const valid = await store.validTicket(key, result.ticket);
           const live = manager.getConversation(view.id);
           if (
             !valid ||
@@ -359,7 +373,8 @@ export function createThreadCache(
             identity() !== scope ||
             !view.refs ||
             (live &&
-              (native.turns(live).length || live.resumeState === "resumed")) ||
+              (native.turns(live).length ||
+                (live.resumeState === "resumed" && native.complete(live)))) ||
             beforeTurns?.length
           )
             return;
@@ -371,7 +386,7 @@ export function createThreadCache(
             notify(view.id);
           }
         } catch {
-          await store.invalidate(view.key);
+          await store.invalidate(key);
         } finally {
           view.reading = false;
           const again = view.readAgain;
@@ -400,6 +415,7 @@ export function createThreadCache(
             pending: false,
             lastWrite: 0,
             saved: new Map(),
+            hasSnapshot: false,
           };
           views.set(id, view);
         }
@@ -508,7 +524,10 @@ export function createThreadCache(
           return;
         }
         const turns = native.turns(state);
-        if (!turns.length) {
+        if (
+          !turns.length &&
+          !(state.resumeState === "resumed" && native.complete(state))
+        ) {
           finishInactive(view);
           return;
         }
@@ -583,7 +602,13 @@ export function createThreadCache(
                 return;
             }
           }
-          if (!pages.length) return;
+          if (
+            view.hasSnapshot &&
+            !pages.length &&
+            keep.length === view.saved.size &&
+            keep.every((id) => view.saved.has(id))
+          )
+            return;
           const complete = native.complete(state);
           const next = await store.savePages(
             view.key,
@@ -600,6 +625,7 @@ export function createThreadCache(
             view.ticket = next ?? ticket;
             if (next) {
               view.saved = saved;
+              view.hasSnapshot = true;
               counts.writes++;
             } else counts.skipped++;
           }
@@ -642,7 +668,8 @@ export function createThreadCache(
             return;
           }
           if (
-            native.turns(state).length &&
+            (native.turns(state).length ||
+              (state.resumeState === "resumed" && native.complete(state))) &&
             view.cached &&
             view.olderRequest == null
           ) {

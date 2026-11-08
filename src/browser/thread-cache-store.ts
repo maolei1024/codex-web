@@ -290,15 +290,22 @@ export function createThreadCacheStore(
           const keep = new Set(keepIds);
           if (preserveUnloaded && previous) {
             const loaded = new Set(keepIds.map((id) => id.split(":page:")[0]));
-            for (const page of previous.pages)
-              if (!loaded.has(page.id.split(":page:")[0])) keep.add(page.id);
-            const anchor = incoming.find((page) =>
-              previous.pages.some((p) => p.id === page.id),
-            );
-            const offset = anchor
-              ? previous.pages.find((p) => p.id === anchor.id)!.order -
-                anchor.order
-              : Math.max(-1, ...previous.pages.map((p) => p.order)) + 1;
+            const previousPages = new Map(previous.pages.map((p) => [p.id, p]));
+            const boundary = previousPages.get(keepIds[0] ?? "");
+            // Only a confirmed older prefix can survive a refreshed tail.
+            // Unmatched newer pages may have been reverted on another device.
+            if (boundary)
+              for (const page of previous.pages)
+                if (
+                  page.order < boundary.order &&
+                  !loaded.has(page.id.split(":page:")[0])
+                )
+                  keep.add(page.id);
+            const anchor = keepIds.findIndex((id) => previousPages.has(id));
+            const offset =
+              anchor >= 0
+                ? previousPages.get(keepIds[anchor]!)!.order - anchor
+                : 0;
             incoming = incoming.map((page) => ({
               ...page,
               order: page.order + offset,
