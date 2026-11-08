@@ -26,6 +26,7 @@ type View = {
   metadata?: any;
   usedProjection: boolean;
   reading: boolean;
+  readAgain?: boolean;
   writing: boolean;
   pending: boolean;
   finalPending?: boolean;
@@ -238,6 +239,7 @@ export function createThreadCache(
         view.generation++;
         view.olderRequest = undefined;
         view.ticket = undefined;
+        view.readAgain = false;
         view.saved.clear();
         clearTimeout(view.timer);
         view.timer = undefined;
@@ -372,9 +374,16 @@ export function createThreadCache(
           await store.invalidate(view.key);
         } finally {
           view.reading = false;
-          if (view.pending) schedule(view);
+          const again = view.readAgain;
+          view.readAgain = false;
+          if (again && view.refs && scope && !disposed) void read(view);
+          else if (view.pending) schedule(view);
           finishInactive(view);
         }
+      }
+      function requestRead(view: View) {
+        if (view.reading) view.readAgain = true;
+        else void read(view);
       }
       function begin(id: string) {
         let view = views.get(id);
@@ -398,7 +407,7 @@ export function createThreadCache(
         if (view.refs === 1) {
           view.lease = `${tab}:${crypto.randomUUID()}`;
           view.pending = true;
-          void read(view);
+          requestRead(view);
           if (scope) void store.touch(view.key, view.lease);
         }
         return () => {
@@ -692,7 +701,7 @@ export function createThreadCache(
             view.key = JSON.stringify([scope, view.id]);
             if (key !== view.key) void store.invalidate(key);
           }
-          if (scope && view.refs) void read(view);
+          if (scope && view.refs) requestRead(view);
         }
       }
       cleanups.push(readState.subscribeStatus(identityChanged));
@@ -701,14 +710,14 @@ export function createThreadCache(
         reset,
         enabled: () => {
           for (const view of views.values())
-            if (view.refs && !view.ticket && !view.reading) {
+            if (view.refs && !view.ticket) {
               view.pending = true;
-              void read(view);
+              requestRead(view);
             }
         },
         connection: () => {
           reset();
-          for (const view of views.values()) if (view.refs) void read(view);
+          for (const view of views.values()) if (view.refs) requestRead(view);
         },
       };
       controllers.add(controller);

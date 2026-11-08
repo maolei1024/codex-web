@@ -342,3 +342,25 @@ test("rapid native subscription replacement does not fence the next writer", asy
   off();
   f.dispose();
 });
+test("reconnection during a cache read reacquires a ticket and persists fresh native history", async () => {
+  let release;
+  const delayDecode = new Promise((r) => {
+    release = r;
+  });
+  const f = setup({ delayDecode });
+  await f.seed();
+  const off = f.listen();
+  await pause(20);
+  f.cache.connectionChanged();
+  f.set("thread", state([turn("new connection history")], "resumed"));
+  release();
+  await until(() => f.cache.diagnostics().writes > 0);
+  const saved = await f.store.readPages(f.key);
+  assert.equal(
+    m.decodePage(saved.pages[0]).items[0].text,
+    "new connection history",
+  );
+  assert.equal(f.cache.diagnostics().hits, 0);
+  off();
+  f.dispose();
+});
