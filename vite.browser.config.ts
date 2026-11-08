@@ -24,6 +24,9 @@ if (typeof asarPackageJson.version !== "string" || !asarPackageJson.version) {
 
 export default defineConfig({
   root: webviewRoot,
+  // Workers are emitted beside the preload bundle. Relative URLs inherit the
+  // authenticated /assets/__build/<id>/ namespace, including nested assets.
+  base: "./",
   define: {
     __CODEX_APP_VERSION__: JSON.stringify(asarPackageJson.version),
     __CODEX_WEB_BUILD_ID__: JSON.stringify(localBuild.id),

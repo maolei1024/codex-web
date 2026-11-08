@@ -31,6 +31,26 @@ Reverse proxies must preserve their `Cache-Control` header without appending
 so a new release selects the new asset namespace. Authentication is checked
 before serving assets; conversation data is not part of the static asset cache.
 
+Conversation history is cached in this browser's IndexedDB database
+`codex-web-thread-cache`, independently of the asset build ID. General settings
+provide an enable switch, 64/128/256 MiB capacity, usage and a clear button.
+The default is 128 MiB, at most 100 conversations and 16 MiB per conversation.
+Opening/viewing updates LRU order; background writes do not. Expiring cross-tab
+leases protect open conversations, and writes skip caching when protected data
+fills the budget. Oversized conversations retain recent complete pages.
+
+The pinned native history selectors show cached text while the real backend
+restores the conversation. A sync indicator distinguishes that provisional view;
+cache hits never grant operation permissions or replace a successful resume.
+Native pagination still checks current history, and uncertain boundaries reload
+online. JSON conversion runs in a Worker; changed pages persist at most once a
+second during streaming and immediately at completion. Cached display data excludes
+attachment binaries, authentication, RPC references, queued operations and drafts.
+Keys include origin, a backend-verified opaque identity and execution-host key.
+Unknown identity, storage errors and unsupported schemas fall back to online reads.
+Clearing or disabling the cache does not affect drafts or server history, and
+transaction generations reject writes queued before a clear or invalidation.
+
 Feature configuration uses an identity-scoped snapshot when available. On a
 cache miss, the Statsig SDK waits at most one second for remote configuration,
 then starts with its existing cached values/defaults and refreshes in the

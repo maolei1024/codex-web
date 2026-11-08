@@ -139,6 +139,17 @@ function setup(t, { pathname = "/", search = "" } = {}) {
           installBrowserNotifications: () => ({ setPreviewSound() {} }),
         },
         "./notification-settings": { mountNotificationSettings() {} },
+        "./thread-cache": {
+          createThreadCache: () => ({
+            diagnostics: () => ({}),
+            connectionChanged() {},
+            authenticationFailed() {},
+          }),
+        },
+        "./thread-cache-settings": {
+          mountThreadCacheSettings() {},
+          showThreadCacheSync() {},
+        },
       }[name] ??
       {},
   });

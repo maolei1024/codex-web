@@ -1,0 +1,49 @@
+--- a/.vite/build/main-CwxgTOle.js
++++ b/.vite/build/main-CwxgTOle.js
+@@ -153221,7 +153221,7 @@
+     );
+   }
+   acceptIdentity(e) {
+-    (this.identity != null && Ee(this.identity, e)) ||
++    (this.identity != null && Ee(this.identity, e) && this.identity.historyCacheIdentity === e.historyCacheIdentity) ||
+       ((this.identity = e), this.retire(`identity`));
+   }
+   dispose() {
+@@ -153367,6 +153367,16 @@
+   return { version: 1, unreadByIdentity: {} };
+ }
+ var zJe = f.r(`thread-read-state`);
++function webHistoryIdentity(identity, auth) {
++  const salt = process.env.CODEX_WEB_TOKEN;
++  if (!salt || !identity) return null;
++  const principal = identity.kind === `chatgpt` && identity.accountId && identity.userId
++    ? [`chatgpt`, identity.accountId, identity.userId]
++    : identity.kind === `execution-storage` && typeof auth?.authToken === `string` && auth.authToken
++      ? [`execution-storage`, identity.authMode, auth.authToken]
++      : null;
++  return principal == null ? null : (0, R.createHmac)(`sha256`, salt).update(JSON.stringify(principal)).digest(`hex`);
++}
+ function BJe(e) {
+   let {
+       localConnection: t,
+@@ -153407,15 +153417,18 @@
+     },
+     f = async () => {
+       if (n.getMaybeConnection(t.hostId) !== t) return null;
++      let webHistoryAuth = null;
+       let e = await i.un(
+         () =>
+           t.sendAppServerRequest(`getAuthStatus`, {
+             includeToken: !0,
+             refreshToken: !1,
+-          }),
++          }).then((status) => { webHistoryAuth = status; return status; }),
+         d,
+       );
+-      return n.getMaybeConnection(t.hostId) === t ? e : null;
++      return n.getMaybeConnection(t.hostId) === t && e != null
++        ? { ...e, historyCacheIdentity: webHistoryIdentity(e, webHistoryAuth) }
++        : null;
+     },
+     p = (e) => {
+       let t =

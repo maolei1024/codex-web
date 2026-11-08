@@ -56,6 +56,15 @@ const env = {
   CODEX_WEB_TOKEN: "container-smoke-only",
 };
 await initializeContainer(env);
+// A disposable identity verifies the cache namespace through the real CLI/RPC.
+await writeFile(
+  `${env.CODEX_HOME}/auth.json`,
+  JSON.stringify({
+    auth_mode: "apikey",
+    OPENAI_API_KEY: "history-cache-container-smoke-only",
+  }),
+  { mode: 0o600 },
+);
 const workspaceRoots = [`${env.CODEX_WEB_DOCUMENTS_DIR}/ChatGPT`];
 await writeFile(
   `${env.CODEX_HOME}/.codex-global-state.json`,
@@ -109,7 +118,10 @@ async function connectClient(headers) {
     await Promise.race([
       once(socket, "open"),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error("WebSocket timeout")), 10_000);
+        timer = setTimeout(
+          () => reject(new Error("WebSocket timeout")),
+          10_000,
+        );
       }),
     ]);
     return client;
@@ -359,6 +371,16 @@ try {
           release.desktopVersion,
         );
         await services.browserHost.getExtensionCounts();
+        const readState = await services.threadReadState.open(() => {});
+        assert.equal(readState.status, "ready");
+        assert.match(readState.identity.historyCacheIdentity, /^[a-f0-9]{64}$/);
+        assert.equal(
+          JSON.stringify(readState.identity).includes(
+            "history-cache-container-smoke-only",
+          ),
+          false,
+        );
+        readState[Symbol.dispose]();
         const subscription = await services.accessInputs.subscribe(() => {});
         subscription[Symbol.dispose]();
         return await services.settings.readAll();

@@ -34,6 +34,11 @@ import {
   type NotificationSound,
 } from "./notifications";
 import { mountNotificationSettings } from "./notification-settings";
+import { createThreadCache } from "./thread-cache";
+import {
+  mountThreadCacheSettings,
+  showThreadCacheSync,
+} from "./thread-cache-settings";
 import {
   adaptDesktopBridge,
   desktopCapabilityOverrides,
@@ -154,6 +159,7 @@ type ElectronShimState = {
   appServerRequestLifecycle?: RpcLifecycle["onLifecycle"];
   isTransportFailure?: typeof isTransportFailure;
   imageDrafts?: typeof imageDrafts;
+  threadCache?: ReturnType<typeof createThreadCache>;
   wrapBrowserServices?: typeof wrapBrowserServices;
   notifications?: ReturnType<typeof installBrowserNotifications>;
   mountNotificationSettings?: (
@@ -500,6 +506,7 @@ function maybeProbeAuthFailure(): void {
     .then((response) => {
       if (response.status === 401) {
         clearStatsigSnapshots();
+        electronShim.threadCache?.authenticationFailed();
         appHostRecovery.authenticationFailed();
       }
     })
@@ -610,6 +617,7 @@ function ensureSocket(): void {
       return;
     }
     socket = null;
+    electronShim.threadCache?.connectionChanged();
     sharedObjectHttp = null;
     binaryReadHttp = null;
     connectionWatchdog?.stop();
@@ -761,12 +769,19 @@ const mobileMediaQuery = matchMedia("(max-width: 768px)");
 const initialSidebarState = !mobileMediaQuery.matches;
 const electronShim = (window.__ELECTRON_SHIM__ ??= {});
 const browserNotifications = installBrowserNotifications();
+const threadCache = createThreadCache({ onSync: showThreadCacheSync });
+electronShim.threadCache = threadCache;
 electronShim.notifications = browserNotifications;
 let disposeNotificationSettings: (() => void) | undefined;
+let disposeThreadCacheSettings: (() => void) | undefined;
 electronShim.mountNotificationSettings = (element, getSound, locale) => {
   disposeNotificationSettings?.();
+  disposeThreadCacheSettings?.();
   disposeNotificationSettings = element
     ? mountNotificationSettings(element, browserNotifications, getSound, locale)
+    : undefined;
+  disposeThreadCacheSettings = element
+    ? mountThreadCacheSettings(element, threadCache, locale)
     : undefined;
 };
 electronShim.appServerRequestLifecycle = (event) => {
@@ -777,6 +792,7 @@ electronShim.isTransportFailure = isTransportFailure;
 electronShim.imageDrafts = imageDrafts;
 electronShim.appHost = appHostRecovery;
 electronShim.diagnostics = () => ({
+  threadCache: threadCache.diagnostics(),
   appHost: appHostRecovery.diagnostics(),
   ports: messagePorts.size,
   pendingInvokes: pendingInvokes.size,

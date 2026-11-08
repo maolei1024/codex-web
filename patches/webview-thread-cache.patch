@@ -1,0 +1,24 @@
+--- a/webview/assets/app-shared-8340f229c2b3.js
++++ b/webview/assets/app-shared-8340f229c2b3.js
+@@ -131461,6 +131461,7 @@
+           return this.#f != null;
+         }
+         identityKey = () => this.#o;
++        historyCacheIdentity = () => this.#t?.identity?.historyCacheIdentity ?? null;
+         isReady = () => this.#e == null || this.#n != null;
+         executionHostKey(e) {
+           return this.#c?.[e];
+@@ -171854,6 +171854,13 @@
+                   ),
+                 ),
+               this.cleanup.push(Wnn(this, this.history.turnMergePolicy))));
++          this.cleanup.push(window.__ELECTRON_SHIM__?.threadCache?.attach(this, {
++            readState: dR,
++            transcript: (state) => ({ type: `reset`, value: n8t(state, this.threadStore.stateReaders.transcriptAccess) }),
++            complete: (state) => bz(state),
++            turns: (state) => mz(state, this.history.turnMergePolicy),
++            placeholder: (id, meta) => G6t({ ...meta, conversationId: id, hostId: this.hostId }),
++          }) ?? (() => {}));
+         }
+         getHostId() {
+           return this.hostId;

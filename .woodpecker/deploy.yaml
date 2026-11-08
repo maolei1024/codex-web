@@ -24,7 +24,7 @@ steps:
       - umask 077
       - printf '%s' "$${K8S_KUBECONFIG}" > /tmp/kubeconfig
       - export KUBECONFIG=/tmp/kubeconfig
-      - kubectl apply --validate=false --openapi-patch=false -f k8s/codex-web.yaml
+      - kubectl -n project-codex-web set image deployment/codex-web codex-web=docker.nexus.ixuni.win/codex/web:build-${CI_PIPELINE_NUMBER}
       - kubectl -n project-codex-web rollout status deployment/codex-web --timeout=10m
     environment:
       K8S_KUBECONFIG: {from_secret: k8s_kubeconfig}
