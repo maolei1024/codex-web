@@ -348,3 +348,21 @@ test("a delayed first background write keeps the original viewing time for LRU",
   assert.equal((await store.readPages("b")).pages.length, 1);
   store.close();
 });
+test("storage error listeners can refresh usage without recursively retrying storage", async () => {
+  let notifications = 0;
+  const store = createThreadCacheStore({
+    factory() {
+      throw new DOMException("fixture", "SecurityError");
+    },
+    error() {
+      notifications++;
+      void store.stats();
+    },
+  });
+  assert.equal(await store.stats(), null);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(notifications, 1);
+  assert.equal(await store.stats(), null);
+  assert.equal(notifications, 1);
+  store.close();
+});

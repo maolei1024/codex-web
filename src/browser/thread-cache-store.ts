@@ -134,6 +134,9 @@ export function createThreadCacheStore(
     }
   }
   async function safe<T>(fallback: T, fn: () => Promise<T>): Promise<T> {
+    // An error listener may refresh the settings statistics. During backoff it
+    // must get a quiet fallback, not recursively publish another storage error.
+    if (closed || now() < failedUntil) return fallback;
     try {
       return await fn();
     } catch (error) {
