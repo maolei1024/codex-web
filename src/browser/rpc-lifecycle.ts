@@ -12,6 +12,7 @@ type PendingRpc = {
   sent: boolean;
   deadline: number | null;
   timer?: ReturnType<typeof setTimeout>;
+  remainingMs?: number;
 };
 
 const CONFIG_READ_TIMEOUT_MS = 15_000;
@@ -52,6 +53,7 @@ function rpcMessage(value: unknown): RpcMessage | null {
 export class RpcLifecycle {
   private pending = new Map<string, PendingRpc>();
   private byRequest = new Map<string, string>();
+  private suspended = false;
 
   constructor(
     private readonly emit: (event: unknown) => void,
@@ -83,12 +85,9 @@ export class RpcLifecycle {
     const pending: PendingRpc = { invokeId, message, sent: false, deadline };
     this.pending.set(invokeId, pending);
     this.byRequest.set(this.key(message.hostId, message.request.id), invokeId);
-    if (deadline !== null) {
-      pending.timer = setTimeout(
-        () => this.expire(),
-        Math.max(0, deadline - this.now()),
-      );
-    }
+    if (deadline !== null && this.suspended)
+      pending.remainingMs = Math.max(0, deadline - this.now());
+    else this.arm(pending);
     return true;
   }
 
@@ -144,7 +143,38 @@ export class RpcLifecycle {
     }
   }
 
+  suspend(): void {
+    if (this.suspended) return;
+    this.suspended = true;
+    for (const request of this.pending.values()) {
+      if (request.deadline !== null)
+        request.remainingMs = Math.max(0, request.deadline - this.now());
+      clearTimeout(request.timer);
+      request.timer = undefined;
+    }
+  }
+
+  resume(): void {
+    if (!this.suspended) return;
+    this.suspended = false;
+    for (const request of this.pending.values()) {
+      if (request.remainingMs !== undefined)
+        request.deadline = this.now() + request.remainingMs;
+      request.remainingMs = undefined;
+      this.arm(request);
+    }
+  }
+
+  private arm(request: PendingRpc): void {
+    if (request.deadline !== null)
+      request.timer = setTimeout(
+        () => this.expire(),
+        Math.max(0, request.deadline - this.now()),
+      );
+  }
+
   expire(): void {
+    if (this.suspended) return;
     for (const [id, pending] of [...this.pending]) {
       if (pending.deadline !== null && pending.deadline <= this.now()) {
         this.fail(

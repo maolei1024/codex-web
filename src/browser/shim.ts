@@ -16,6 +16,8 @@ import { reconnectDelayMs } from "./reconnect";
 import { RpcLifecycle, isTransportFailure } from "./rpc-lifecycle";
 import { ReconnectRecovery } from "./reconnect-recovery";
 import { ConnectionWatchdog } from "./connection-watchdog";
+import { TransportRecoveryWindow } from "./transport-recovery-window";
+import { createConnectionDiagnostics } from "./connection-diagnostics";
 import { SharedObjectHttpClient } from "./shared-object-http";
 import {
   BinaryReadHttpClient,
@@ -150,6 +152,7 @@ type MemoryNavigationChange = {
 
 type ElectronShimState = {
   diagnostics?: () => unknown;
+  exportDiagnostics?: () => void;
   appHost?: AppHostRecovery;
   configureAppHost?: (
     factory: Parameters<AppHostRecovery["configure"]>[0],
@@ -198,6 +201,27 @@ let reconnectTimeoutId: number | null = null;
 let reconnectAttempt = 0;
 let consecutiveConnectFailures = 0;
 let authProbeInFlight = false;
+let socketGeneration = 0;
+let recoveryEpoch = 0;
+let heartbeatTimer: number | undefined;
+let pageHidden = document.visibilityState === "hidden";
+let pageFrozen = false;
+let offlineHint = window.navigator?.onLine === false;
+let manualNetworkOverride = false;
+let transportSuspended = false;
+let lastManualRetry = -Infinity;
+let recoverAfterOpen = false;
+let connectionState = "connecting";
+const connectionDiagnostics = createConnectionDiagnostics();
+const transportWindow = new TransportRecoveryWindow(() => {
+  connectionDiagnostics.record("watchdog-timeout", {
+    reason: "connect-timeout",
+    generation: socketGeneration,
+  });
+  retireSocket();
+  showConnectionState("failed");
+  collectServerDiagnostics();
+});
 const outboundQueue: RendererToMainMessage[] = [];
 const sharedObjectSubscriptions = new SharedObjectSubscriptions();
 const pendingInvokes = new Map<
@@ -238,11 +262,19 @@ const appHostRecovery = new AppHostRecovery(
 );
 let retryBoot: (() => void) | undefined;
 let recoveringAppHost: Promise<void> | undefined;
-function recoverAppHost(manual = false): void {
-  if (recoveringAppHost) return;
-  recoveringAppHost = appHostRecovery
-    .recover(manual)
+function recoverAppHost(): void {
+  if (
+    recoveringAppHost ||
+    transportSuspended ||
+    appHostRecovery.failed ||
+    socket?.readyState !== WebSocket.OPEN
+  )
+    return;
+  const epoch = recoveryEpoch;
+  const task = appHostRecovery
+    .recover()
     .then(() => {
+      if (epoch !== recoveryEpoch) return;
       retryBoot?.();
       retryBoot = undefined;
       reconnectRecovery.begin();
@@ -250,8 +282,9 @@ function recoverAppHost(manual = false): void {
     })
     .catch(() => {})
     .finally(() => {
-      recoveringAppHost = undefined;
+      if (recoveringAppHost === task) recoveringAppHost = undefined;
     });
+  recoveringAppHost = task;
 }
 const rpcLifecycle = new RpcLifecycle(
   (event) => emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [event]),
@@ -314,6 +347,7 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
     return;
   }
   if (message.type === "bridge-pong") {
+    connectionDiagnostics.record("pong", { generation: socketGeneration });
     connectionWatchdog?.pong(message.requestId);
     return;
   }
@@ -409,11 +443,9 @@ function flushOutboundQueue(): void {
 
 function failPendingRequests(reason: Error): void {
   hasConnectionFailed = true;
-  const retained = outboundQueue.filter(
-    (message) => message.type === "ipc-renderer-send",
-  );
+  // Fire-and-forget sends can mutate state too. Only tracked subscriptions are
+  // restored explicitly; no queued message from a retired attempt is replayed.
   outboundQueue.length = 0;
-  outboundQueue.push(...retained);
 
   rpcLifecycle.disconnect();
 
@@ -438,12 +470,18 @@ function closeMessagePorts(): void {
 }
 
 function scheduleReconnect(): void {
-  if (appHostRecovery.failed) return;
+  if (appHostRecovery.failed || transportWindow.failed || transportSuspended)
+    return;
   if (reconnectTimeoutId !== null) {
     return;
   }
   const delay = reconnectDelayMs(reconnectAttempt);
   reconnectAttempt += 1;
+  connectionDiagnostics.record("reconnect-scheduled", {
+    attempt: reconnectAttempt,
+    delayMs: delay,
+    generation: socketGeneration,
+  });
   reconnectTimeoutId = window.setTimeout(() => {
     reconnectTimeoutId = null;
     ensureSocket();
@@ -455,28 +493,37 @@ function reconnectNow(): void {
     window.clearTimeout(reconnectTimeoutId);
     reconnectTimeoutId = null;
   }
-  reconnectAttempt = 0;
   ensureSocket();
 }
 
-function forceReconnect(): void {
+function retireSocket(): void {
+  appHostRecovery.suspend();
+  rpcLifecycle.suspend();
+  transportWindow.start();
   const previousSocket = socket;
-  if (previousSocket) {
-    sharedObjectHttp?.close();
-    sharedObjectHttp = null;
-    binaryReadHttp?.close();
-    binaryReadHttp = null;
-    socket = null;
-    connectionWatchdog?.stop();
-    connectionWatchdog = null;
-    closeMessagePorts();
-    failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
-    previousSocket.close();
-  }
+  socket = null;
+  sharedObjectHttp?.close();
+  sharedObjectHttp = null;
+  binaryReadHttp?.close();
+  binaryReadHttp = null;
+  connectionWatchdog?.stop();
+  connectionWatchdog = null;
+  if (previousSocket) electronShim.threadCache?.connectionChanged();
+  // Calls queued during a reconnect delay also belong to the retired attempt.
+  closeMessagePorts();
+  failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
+  previousSocket?.close();
+}
+
+function forceReconnect(): void {
+  retireSocket();
   reconnectNow();
 }
 
 function probeConnection(): void {
+  if (transportSuspended) return;
+  transportWindow.check();
+  if (transportWindow.failed) return;
   appHostRecovery.checkDeadlines();
   rpcLifecycle.expire();
   if (appHostRecovery.failed) return;
@@ -486,12 +533,161 @@ function probeConnection(): void {
   const currentSocket = socket;
   const requestId = nextRequestId();
   connectionWatchdog?.probe(requestId, () => {
+    connectionDiagnostics.record("ping", { generation: socketGeneration });
     try {
       currentSocket.send(JSON.stringify({ type: "bridge-ping", requestId }));
     } catch {
       forceReconnect();
     }
   });
+}
+
+function showConnectionState(state: string, method = ""): void {
+  connectionState = state;
+  connectionDiagnostics.record("recovery-state", {
+    state,
+    generation: socketGeneration,
+  });
+  recoveryNotice(state, method, manualReconnect, exportConnectionDiagnostics);
+}
+
+function connectionSnapshot() {
+  return {
+    state: connectionState,
+    readyState: socket?.readyState ?? WebSocket.CLOSED,
+    generation: socketGeneration,
+    reconnectAttempt,
+    consecutiveConnectFailures,
+    recovering: !!recoveringAppHost,
+    suspended: transportSuspended,
+    authenticationFailed: appHostRecovery.authenticationRequired,
+    transportRemainingMs: transportWindow.diagnostics().remainingMs,
+    recoveryRemainingMs: appHostRecovery.diagnostics().cycle?.remainingMs,
+    online: !offlineHint,
+    visibility: document.visibilityState,
+  };
+}
+
+function diagnosticInput() {
+  const browser = window.navigator;
+  return {
+    buildId: __CODEX_WEB_BUILD_ID__,
+    browser: {
+      userAgent: browser?.userAgent,
+      online: browser?.onLine,
+      visibility: document.visibilityState,
+      secureContext: window.isSecureContext,
+      network: (browser as Navigator & { connection?: unknown })?.connection,
+    },
+    connection: connectionSnapshot(),
+    diagnostics: electronShim.diagnostics?.(),
+  };
+}
+
+let lastServerDiagnosticAt = -Infinity;
+function collectServerDiagnostics(): void {
+  if (Date.now() - lastServerDiagnosticAt < 10_000) return;
+  lastServerDiagnosticAt = Date.now();
+  void connectionDiagnostics.collect(diagnosticInput(), {
+    online: !offlineHint,
+  });
+}
+
+function exportConnectionDiagnostics(): void {
+  connectionDiagnostics.record("export", connectionSnapshot());
+  // Keep download in the user gesture; a failed server must never block it.
+  const blob = new Blob([connectionDiagnostics.serialize(diagnosticInput())], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `codex-web-diagnostics-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  document.body.append(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+}
+
+function restartRecovery(manual = false): void {
+  if (!manual && appHostRecovery.authenticationRequired) return;
+  recoveryEpoch++;
+  recoveringAppHost = undefined;
+  retireSocket();
+  if (!appHostRecovery.resetRecovery(manual)) return;
+  transportWindow.reset();
+  if (!transportSuspended) transportWindow.resume();
+  recoverAfterOpen = true;
+  reconnectAttempt = 0;
+  showConnectionState("connecting");
+  reconnectNow();
+}
+
+function manualReconnect(): void {
+  // One tap owns a complete bounded attempt, including the radio/VPN warm-up.
+  if (Date.now() - lastManualRetry < 1_000) return;
+  lastManualRetry = Date.now();
+  connectionDiagnostics.record("manual-retry", {
+    generation: socketGeneration,
+  });
+  manualNetworkOverride = true;
+  if (pageHidden || pageFrozen) return;
+  transportSuspended = false;
+  restartRecovery(true);
+  scheduleHeartbeat();
+}
+
+function scheduleHeartbeat(): void {
+  window.clearTimeout(heartbeatTimer);
+  heartbeatTimer = undefined;
+  if (transportSuspended || transportWindow.failed || appHostRecovery.failed)
+    return;
+  heartbeatTimer = window.setTimeout(() => {
+    heartbeatTimer = undefined;
+    probeConnection();
+    scheduleHeartbeat();
+  }, 20_000);
+}
+
+function updateLifecycle(): void {
+  const paused =
+    pageHidden || pageFrozen || (offlineHint && !manualNetworkOverride);
+  if (paused === transportSuspended) return;
+  transportSuspended = paused;
+  if (paused) {
+    window.clearTimeout(heartbeatTimer);
+    heartbeatTimer = undefined;
+    if (reconnectTimeoutId !== null) window.clearTimeout(reconnectTimeoutId);
+    reconnectTimeoutId = null;
+    appHostRecovery.suspend();
+    rpcLifecycle.suspend();
+    connectionWatchdog?.suspend();
+    transportWindow.suspend();
+    if (offlineHint && !pageHidden && !pageFrozen)
+      showConnectionState("waiting-network");
+    return;
+  }
+  // Handle the lifecycle transition before inspecting old wall-clock deadlines.
+  const diagnostics = appHostRecovery.diagnostics();
+  const needsRecovery =
+    transportWindow.failed ||
+    appHostRecovery.failed ||
+    diagnostics.cycle != null ||
+    diagnostics.pending > 0 ||
+    socket?.readyState !== WebSocket.OPEN;
+  transportWindow.resume();
+  connectionWatchdog?.resume();
+  if (needsRecovery) restartRecovery();
+  else {
+    appHostRecovery.resume();
+    rpcLifecycle.resume();
+    probeConnection();
+    if (connectionState === "waiting-network") showConnectionState("connected");
+  }
+  scheduleHeartbeat();
 }
 
 function maybeProbeAuthFailure(): void {
@@ -502,9 +698,17 @@ function maybeProbeAuthFailure(): void {
     return;
   }
   authProbeInFlight = true;
-  void fetch("/", { method: "HEAD", cache: "no-store" })
+  const generation = socketGeneration;
+  void fetch("/", {
+    method: "HEAD",
+    cache: "no-store",
+    signal: AbortSignal.timeout(5_000),
+  })
     .then((response) => {
+      if (generation !== socketGeneration || transportSuspended) return;
       if (response.status === 401) {
+        connectionDiagnostics.clearServerSnapshot();
+        connectionDiagnostics.record("authentication-failed");
         clearStatsigSnapshots();
         electronShim.threadCache?.authenticationFailed();
         appHostRecovery.authenticationFailed();
@@ -517,7 +721,8 @@ function maybeProbeAuthFailure(): void {
 }
 
 function ensureSocket(): void {
-  if (appHostRecovery.failed) return;
+  if (appHostRecovery.failed || transportWindow.failed || transportSuspended)
+    return;
   if (
     socket &&
     (socket.readyState === WebSocket.OPEN ||
@@ -525,6 +730,10 @@ function ensureSocket(): void {
   ) {
     return;
   }
+
+  appHostRecovery.suspend();
+  rpcLifecycle.suspend();
+  transportWindow.start();
 
   sharedObjectHttp?.close();
   binaryReadHttp?.close();
@@ -542,24 +751,45 @@ function ensureSocket(): void {
     (event) => emitRendererEvent(MESSAGE_FOR_VIEW_CHANNEL, [event]),
   );
   binaryReadHttp = currentBinaryReadHttp;
+  const generation = ++socketGeneration;
+  const startedAt = Date.now();
+  connectionDiagnostics.record("socket-connect", {
+    generation,
+    attempt: reconnectAttempt,
+  });
   const currentSocket = new WebSocket(
     `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/__backend/ipc?sharedObjectHttp=1&binaryReadHttp=1&clientId=${currentSharedObjectHttp.clientId}`,
   );
   socket = currentSocket;
   connectionWatchdog = new ConnectionWatchdog(() => {
-    if (socket !== currentSocket) return;
+    if (socket !== currentSocket || transportSuspended) return;
+    connectionDiagnostics.record("watchdog-timeout", {
+      generation,
+      reason: opened ? "pong-timeout" : "connect-timeout",
+    });
     forceReconnect();
   });
   let opened = false;
 
   currentSocket.addEventListener("open", () => {
-    if (socket !== currentSocket) {
+    if (socket !== currentSocket || transportWindow.failed) {
       return;
     }
+    transportWindow.connected();
+    if (socket !== currentSocket || transportWindow.failed) return;
+    if (!transportSuspended) {
+      appHostRecovery.resume();
+      rpcLifecycle.resume();
+    }
     opened = true;
+    connectionDiagnostics.record("socket-open", {
+      generation,
+      elapsedMs: Date.now() - startedAt,
+    });
     currentSharedObjectHttp.open();
     currentBinaryReadHttp.open();
     connectionWatchdog?.opened();
+    scheduleHeartbeat();
     reconnectRecovery.begin();
     reconnectAttempt = 0;
     consecutiveConnectFailures = 0;
@@ -595,6 +825,10 @@ function ensureSocket(): void {
       recoverAppHost();
     }
     hasConnectedBefore = true;
+    if (recoverAfterOpen) {
+      recoverAfterOpen = false;
+      recoverAppHost();
+    }
   });
   currentSocket.addEventListener("message", (event) => {
     if (socket !== currentSocket) {
@@ -610,30 +844,42 @@ function ensureSocket(): void {
       );
     }
   });
-  currentSocket.addEventListener("close", () => {
+  currentSocket.addEventListener("close", (event) => {
     currentSharedObjectHttp.close();
     currentBinaryReadHttp.close();
     if (socket !== currentSocket) {
       return;
     }
+    connectionDiagnostics.record("socket-close", {
+      generation,
+      code: event.code,
+      wasClean: event.wasClean,
+      elapsedMs: Date.now() - startedAt,
+    });
     socket = null;
     electronShim.threadCache?.connectionChanged();
     sharedObjectHttp = null;
     binaryReadHttp = null;
     connectionWatchdog?.stop();
     connectionWatchdog = null;
+    appHostRecovery.suspend();
+    rpcLifecycle.suspend();
+    transportWindow.start();
     if (!opened) {
       consecutiveConnectFailures += 1;
       maybeProbeAuthFailure();
     }
     closeMessagePorts();
     failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
+    if (!transportSuspended && !appHostRecovery.failed)
+      showConnectionState("connecting");
     scheduleReconnect();
   });
   currentSocket.addEventListener("error", () => {
     if (socket !== currentSocket) {
       return;
     }
+    connectionDiagnostics.record("socket-error", { generation });
     // A failed browser handshake may stay CONNECTING until its close callback.
     // The watchdog bounds it even when that callback never arrives.
     scheduleReconnect();
@@ -799,12 +1045,25 @@ electronShim.diagnostics = () => ({
   pendingAppRequests: rpcLifecycle.size,
   sendQueue: outboundQueue.length,
   bufferedBytes: socket?.bufferedAmount ?? 0,
+  connection: connectionSnapshot(),
 });
+electronShim.exportDiagnostics = exportConnectionDiagnostics;
 electronShim.configureAppHost = async (factory) => {
   appHostRecovery.configure(
     factory,
-    (state, method) =>
-      recoveryNotice(state, method, () => recoverAppHost(true)),
+    (state, method) => {
+      if (
+        transportSuspended &&
+        state !== "connected" &&
+        method !== "authentication"
+      ) {
+        if (offlineHint && !pageHidden) showConnectionState("waiting-network");
+        return;
+      }
+      showConnectionState(state, method);
+      if (state === "connected" || state === "failed")
+        collectServerDiagnostics();
+    },
     () => recoverAppHost(),
   );
   const services = await appHostRecovery.start();
@@ -854,7 +1113,13 @@ electronShim.configureAppHost = async (factory) => {
 };
 electronShim.bootFailed = (retry) => {
   retryBoot = retry;
-  recoveryNotice("failed", "services", () => recoverAppHost(true));
+  if (
+    !transportSuspended &&
+    !transportWindow.active &&
+    !recoverAfterOpen &&
+    !recoveringAppHost
+  )
+    showConnectionState("failed", "services");
 };
 const registeredQueryClients = new WeakSet<object>();
 electronShim.registerQueryClient = (client) => {
@@ -1150,18 +1415,57 @@ export const ipcRenderer = {
   },
 };
 
+updateLifecycle();
 ensureSocket();
+scheduleHeartbeat();
 installBrowserFileUploadBridge();
 installMobileViewportGuard();
 
-window.addEventListener("online", probeConnection);
+window.addEventListener("online", () => {
+  offlineHint = false;
+  manualNetworkOverride = false;
+  connectionDiagnostics.record("online");
+  const wasSuspended = transportSuspended;
+  updateLifecycle();
+  if (!wasSuspended) probeConnection();
+});
+window.addEventListener("offline", () => {
+  offlineHint = true;
+  manualNetworkOverride = false;
+  connectionDiagnostics.record("offline");
+  updateLifecycle();
+});
+window.addEventListener("pagehide", () => {
+  pageFrozen = true;
+  connectionDiagnostics.record("page-hide");
+  updateLifecycle();
+});
 window.addEventListener("pageshow", (event) => {
-  if (event.persisted) probeConnection();
+  pageFrozen = false;
+  pageHidden = document.visibilityState === "hidden";
+  connectionDiagnostics.record("page-show", { persisted: event.persisted });
+  const wasSuspended = transportSuspended;
+  updateLifecycle();
+  if (event.persisted && !wasSuspended) probeConnection();
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") {
-    probeConnection();
-  }
+  pageHidden = document.visibilityState === "hidden";
+  connectionDiagnostics.record("visibility-change", {
+    visibility: pageHidden ? "hidden" : "visible",
+  });
+  const wasSuspended = transportSuspended;
+  updateLifecycle();
+  if (!pageHidden && !wasSuspended) probeConnection();
+});
+document.addEventListener("freeze", () => {
+  pageFrozen = true;
+  connectionDiagnostics.record("freeze");
+  updateLifecycle();
+});
+document.addEventListener("resume", () => {
+  pageFrozen = false;
+  connectionDiagnostics.record("resume");
+  updateLifecycle();
 });
 
 export const contextBridge = {

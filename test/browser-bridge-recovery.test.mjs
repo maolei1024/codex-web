@@ -21,6 +21,8 @@ const modules = Object.fromEntries(
       "reconnect",
       "app-host-recovery",
       "crypto-compat",
+      "connection-diagnostics",
+      "transport-recovery-window",
     ].map(async (name) => [
       `./${name}`,
       await importTypescriptModule(`src/browser/${name}.ts`),
@@ -49,6 +51,7 @@ const routesSource = ts.transpileModule(
 function setup(t, { pathname = "/", search = "" } = {}) {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 });
   const sockets = [],
+    downloads = [],
     windowEvents = new Map(),
     documentEvents = new Map();
   class Socket {
@@ -100,6 +103,7 @@ function setup(t, { pathname = "/", search = "" } = {}) {
     history: {},
     setTimeout,
     clearTimeout,
+    navigator: { onLine: true, userAgent: "test" },
     addEventListener: (type, fn) => windowEvents.set(type, fn),
   };
   const routes = {};
@@ -109,6 +113,13 @@ function setup(t, { pathname = "/", search = "" } = {}) {
     URLSearchParams,
   });
   const exports = {};
+  const document = {
+    visibilityState: "visible",
+    addEventListener: (type, fn) => documentEvents.set(type, fn),
+    body: { append() {} },
+    createElement: () => ({ click() {}, remove() {} }),
+  };
+  const notices = [];
   vm.runInNewContext(shimSource, {
     exports,
     window,
@@ -117,10 +128,17 @@ function setup(t, { pathname = "/", search = "" } = {}) {
     clearTimeout,
     WebSocket: Socket,
     URLSearchParams,
-    document: {
-      visibilityState: "visible",
-      addEventListener: (type, fn) => documentEvents.set(type, fn),
+    document,
+    AbortSignal,
+    Blob,
+    URL: {
+      createObjectURL(blob) {
+        downloads.push(blob);
+        return "blob:test";
+      },
+      revokeObjectURL() {},
     },
+    fetch: async () => ({ status: 200 }),
     matchMedia: () => ({ matches: false }),
     console: { info() {}, error() {} },
     __CODEX_APP_VERSION__: "test",
@@ -134,7 +152,12 @@ function setup(t, { pathname = "/", search = "" } = {}) {
           isLocalFilePickerMessage: () => false,
         },
         "./mobile-viewport": { installMobileViewportGuard() {} },
-        "./recovery-notice": { recoveryNotice() {}, checkForUpdate() {} },
+        "./recovery-notice": {
+          recoveryNotice(...args) {
+            notices.push(args);
+          },
+          checkForUpdate() {},
+        },
         "./notifications": {
           installBrowserNotifications: () => ({ setPreviewSound() {} }),
         },
@@ -156,8 +179,26 @@ function setup(t, { pathname = "/", search = "" } = {}) {
   return {
     sockets,
     window,
+    notices,
+    downloads,
     ipc: exports.ipcRenderer,
     foreground: () => documentEvents.get("visibilitychange")(),
+    hide: () => {
+      document.visibilityState = "hidden";
+      documentEvents.get("visibilitychange")();
+    },
+    show: () => {
+      document.visibilityState = "visible";
+      documentEvents.get("visibilitychange")();
+    },
+    offline: () => {
+      window.navigator.onLine = false;
+      windowEvents.get("offline")();
+    },
+    online: () => {
+      window.navigator.onLine = true;
+      windowEvents.get("online")();
+    },
     pageshow: () => windowEvents.get("pageshow")({ persisted: true }),
   };
 }
@@ -168,6 +209,7 @@ for (const encoded of [
 ]) {
   test(`draft route ${encoded} becomes ready without a history request and survives recovery`, async (t) => {
     const bridge = setup(t, { pathname: `/thread/${encoded}` });
+    bridge.sockets[0].open();
     const recovery = bridge.window.__ELECTRON_SHIM__.appHost;
     const notices = [];
     recovery.configure(
@@ -212,6 +254,7 @@ test("persisted route recovery still waits for the decoded foreground history", 
     search: "?hostId=remote-test",
   });
   const recovery = bridge.window.__ELECTRON_SHIM__.appHost;
+  bridge.sockets[0].open();
   const notices = [];
   recovery.configure(
     () => ({
@@ -566,5 +609,209 @@ test("reconnection replays subscriptions before recovery and suppresses duplicat
       .filter((event) => event.isSnapshot === false)
       .map((event) => event.hostId),
     ["local", "remote"],
+  );
+});
+
+const flush = async () => {
+  for (let i = 0; i < 60; i++) await Promise.resolve();
+};
+
+function configureRecovery(bridge) {
+  const recovery = bridge.window.__ELECTRON_SHIM__.appHost;
+  let sessions = 0;
+  recovery.configure(() => {
+    sessions++;
+    return {
+      services: Promise.resolve({
+        settings: { readAll: async () => ({}) },
+        startup: { whenReady: async () => {} },
+      }),
+      close() {},
+    };
+  });
+  return { recovery, sessions: () => sessions };
+}
+
+test("fast handshake failures wait for the network without spending application retries", async (t) => {
+  const bridge = setup(t),
+    { recovery, sessions } = configureRecovery(bridge);
+  const boot = recovery.start();
+  for (let i = 0; i < 8; i++) {
+    bridge.sockets.at(-1).close();
+    t.mock.timers.tick(1_000);
+    bridge.foreground();
+    await flush();
+  }
+  assert.equal(sessions(), 0);
+  assert.equal(recovery.failed, false);
+  assert.equal(recovery.diagnostics().cycle?.retries ?? 0, 0);
+  bridge.sockets.at(-1).open();
+  await boot;
+  assert.equal(sessions(), 1);
+  assert.equal(recovery.suspended, false);
+});
+
+test("network recovery is bounded and repeated manual taps own one fresh attempt", async (t) => {
+  const bridge = setup(t),
+    { recovery } = configureRecovery(bridge);
+  t.mock.timers.tick(60_001);
+  await flush();
+  assert.equal(bridge.notices.at(-1)[0], "failed");
+  const count = bridge.sockets.length;
+  t.mock.timers.tick(120_000);
+  assert.equal(bridge.sockets.length, count);
+  const retry = bridge.notices.at(-1)[2];
+  retry();
+  retry();
+  retry();
+  assert.equal(bridge.sockets.length, count + 1);
+  assert.equal(bridge.notices.at(-1)[0], "connecting");
+  for (let i = 0; i < 6; i++) {
+    bridge.sockets.at(-1).close();
+    t.mock.timers.tick(1_000);
+    bridge.foreground();
+    await flush();
+  }
+  assert.equal(recovery.failed, false);
+  assert.equal(bridge.notices.at(-1)[0], "connecting");
+  bridge.sockets.at(-1).open();
+  await flush();
+  assert.equal(recovery.suspended, false);
+});
+
+test("sleep and offline time do not exhaust the next foreground handshake", async (t) => {
+  const bridge = setup(t),
+    { recovery } = configureRecovery(bridge);
+  bridge.hide();
+  bridge.sockets[0].close();
+  t.mock.timers.tick(3_600_000);
+  assert.equal(bridge.sockets.length, 1);
+  assert.equal(recovery.failed, false);
+  bridge.show();
+  assert.equal(bridge.sockets.length, 2);
+  assert.equal(bridge.notices.at(-1)[0], "connecting");
+  t.mock.timers.tick(3_000);
+  assert.equal(recovery.failed, false);
+  bridge.offline();
+  bridge.sockets.at(-1).close();
+  t.mock.timers.tick(600_000);
+  assert.equal(bridge.sockets.length, 2);
+  assert.equal(bridge.notices.at(-1)[0], "waiting-network");
+  // A false offline hint must not block an explicit attempt.
+  bridge.notices.at(-1)[2]();
+  assert.equal(bridge.sockets.length, 3);
+  bridge.sockets.at(-1).open();
+  await flush();
+  assert.equal(recovery.suspended, false);
+});
+
+test("a healthy sleeping page probes afresh and ignores the pre-sleep pong", async (t) => {
+  const bridge = setup(t),
+    { recovery } = configureRecovery(bridge);
+  const socket = bridge.sockets[0];
+  socket.open();
+  const services = await recovery.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    recovery.observeNative({ method, type: "completed" });
+  bridge.foreground();
+  const oldPing = socket.sent.at(-1).requestId;
+  bridge.hide();
+  t.mock.timers.tick(3_600_000);
+  bridge.show();
+  assert.equal(bridge.sockets.length, 1);
+  const newPing = socket.sent.at(-1).requestId;
+  assert.notEqual(newPing, oldPing);
+  socket.receive({ type: "bridge-pong", requestId: oldPing });
+  t.mock.timers.tick(4_999);
+  assert.equal(bridge.sockets.length, 1);
+  socket.receive({ type: "bridge-pong", requestId: newPing });
+  t.mock.timers.tick(1);
+  assert.equal(bridge.sockets.length, 1);
+  assert.equal(recovery.failed, false);
+});
+
+test("bridge exports local diagnostics synchronously while fully offline", async (t) => {
+  const bridge = setup(t, {
+    pathname: "/thread/private-id",
+    search: "?token=private-token",
+  });
+  bridge.offline();
+  bridge.window.__ELECTRON_SHIM__.exportDiagnostics();
+  assert.equal(bridge.downloads.length, 1);
+  const text = await bridge.downloads[0].text(),
+    report = JSON.parse(text);
+  assert.equal(report.connection.online, false);
+  assert.ok(report.events.some((event) => event.type === "offline"));
+  assert.ok(report.events.some((event) => event.type === "export"));
+  assert.equal(report.server.status, "not-requested");
+  assert.ok(!text.includes("private-id"));
+  assert.ok(!text.includes("private-token"));
+});
+
+test("manual retry overrides an offline hint but still expires after its finite allowance", async (t) => {
+  const bridge = setup(t);
+  bridge.offline();
+  bridge.notices.at(-1)[2]();
+  assert.equal(bridge.sockets.length, 2);
+  t.mock.timers.tick(60_001);
+  await flush();
+  assert.equal(bridge.notices.at(-1)[0], "failed");
+  const count = bridge.sockets.length;
+  t.mock.timers.tick(120_000);
+  assert.equal(bridge.sockets.length, count);
+});
+
+test("a cancelled old boot cannot replace the new manual attempt's progress notice", async (t) => {
+  const bridge = setup(t),
+    first = bridge.sockets[0];
+  first.open();
+  const boot = bridge.window.__ELECTRON_SHIM__
+    .configureAppHost(() => ({
+      services: new Promise(() => {}),
+      close() {},
+    }))
+    .catch(() => bridge.window.__ELECTRON_SHIM__.bootFailed(() => {}));
+  await flush();
+  bridge.offline();
+  bridge.notices.at(-1)[2]();
+  await boot;
+  assert.equal(bridge.sockets.length, 2);
+  assert.equal(bridge.notices.at(-1)[0], "connecting");
+});
+
+test("manual retry retires calls queued while offline even when no socket remains", async (t) => {
+  const bridge = setup(t),
+    client = await clientFor(bridge);
+  bridge.sockets[0].open();
+  bridge.offline();
+  bridge.sockets[0].close();
+  const write = client.sendRequest(
+    "turn/start",
+    {},
+    { trace: null, timeoutMs: 0 },
+  );
+  const rejected = assert.rejects(
+    write,
+    (error) =>
+      error.name === "AppServerRequestDeliveryError" ||
+      error.name === "CodexWebTransportError",
+  );
+  bridge.ipc.send("test:mutation", { private: true });
+  bridge.notices.at(-1)[2]();
+  await rejected;
+  const socket = bridge.sockets.at(-1);
+  socket.open();
+  await flush();
+  assert.equal(
+    socket.sent.some(
+      (message) => message.args?.[0]?.request?.method === "turn/start",
+    ),
+    false,
+  );
+  assert.equal(
+    socket.sent.some((message) => message.channel === "test:mutation"),
+    false,
   );
 });

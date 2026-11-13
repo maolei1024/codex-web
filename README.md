@@ -184,6 +184,27 @@ queued messages, pending transfers, the longest current ACK wait and total ACK
 timeouts. Events contain methods, phases, durations and counts, never request
 arguments, messages, drafts, credentials or feature-assignment payloads.
 
+Browser recovery pauses its timers while the page is hidden, frozen or reporting
+offline. Returning to the foreground probes a healthy connection afresh, or starts
+one new bounded recovery attempt for an interrupted connection. WebSocket connection
+attempts have their own 60-second foreground allowance with exponential backoff;
+configuration reads start after the socket opens and retain their separate bounded
+read retries. A visible page checks the connection every 20 seconds. Manual retry
+retires the previous attempt and shows its progress immediately; repeated taps do
+not create parallel connections. An offline hint can still be overridden by manual
+retry. Authentication failures require signing in again. Recovery never replays
+user writes or reloads the editor.
+
+Choose **Export diagnostics** above the settings/profile button at the bottom of
+the navigation rail, or in the recovery notice, to download a local JSON report,
+including while offline. It contains
+the build, coarse browser/network state, recovery budgets, bounded recent connection
+events and request counters. A recent authenticated server snapshot, when available,
+includes its capture time and age; collecting it is time- and size-limited and never
+blocks the download. The report excludes conversation content, drafts, credentials,
+URLs, project paths and host/thread identifiers. Events stay in memory for the life
+of the page (up to 200); export before refreshing if a connection fails.
+
 Tests exercise the pinned extracted RPC transports and request client, including
 timeouts, late replies, subscription restoration and concurrent tabs. The image smoke
 test performs a real AppHost handshake and settings read, plus ordinary native global

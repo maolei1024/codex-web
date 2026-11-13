@@ -332,6 +332,266 @@ test("foreground deadline check honors elapsed time rather than suspended timer 
   assert.equal(env.coordinator.diagnostics().pending, 0);
 });
 
+test("background suspension pauses a pending native read without closing healthy subscriptions", async (t) => {
+  let release;
+  const env = setup(
+    t,
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const services = await env.coordinator.start();
+  const updates = [];
+  const subscription = await services.settings.subscribe("theme", (value) =>
+    updates.push(value),
+  );
+  const read = services.settings.readAll();
+  await settle();
+  t.mock.timers.tick(5_000);
+  env.coordinator.suspend();
+  const remaining = env.coordinator.diagnostics().cycle.remainingMs;
+  env.coordinator.suspend();
+  t.mock.timers.tick(3_600_000);
+  env.coordinator.checkDeadlines();
+  env.coordinator.observeNative({ method: "config/read", type: "timed-out" });
+  assert.equal(env.coordinator.failed, false);
+  assert.equal(env.coordinator.diagnostics().pending, 1);
+  assert.equal(env.coordinator.diagnostics().cycle.remainingMs, remaining);
+  assert.deepEqual(env.coordinator.diagnostics().requiredFailures, []);
+  assert.equal(env.callbacks.size, 1);
+  assert.deepEqual(updates, ["initial"]);
+  env.coordinator.resume();
+  t.mock.timers.tick(9_999);
+  env.coordinator.checkDeadlines();
+  assert.equal(env.connections, 1);
+  release({ values: { theme: "dark" }, configuredValues: {} });
+  assert.equal((await read).values.theme, "dark");
+  assert.equal(env.coordinator.failed, false);
+  subscription[Symbol.dispose]();
+});
+
+test("resuming a recovery retains its unspent bounded budget and duplicate resume cannot extend it", async (t) => {
+  const env = setup(t);
+  const services = await env.coordinator.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    env.coordinator.observeNative({ method, type: "completed" });
+  env.coordinator.disconnect();
+  await env.coordinator.recover();
+  t.mock.timers.tick(10_000);
+  env.coordinator.suspend();
+  t.mock.timers.tick(3_600_000);
+  env.coordinator.resume();
+  assert.equal(env.coordinator.diagnostics().cycle.remainingMs, 50_000);
+  t.mock.timers.tick(40_000);
+  env.coordinator.resume();
+  assert.equal(env.coordinator.diagnostics().cycle.remainingMs, 10_000);
+  t.mock.timers.tick(9_999);
+  assert.equal(env.coordinator.failed, false);
+  t.mock.timers.tick(1);
+  assert.equal(env.coordinator.failed, true);
+});
+
+test("manual recovery replaces a pending handshake and late failures cannot spend the new budget", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 });
+  const coordinator = new AppHostRecovery();
+  let failOld,
+    calls = 0,
+    closed = 0;
+  coordinator.configure(() => ({
+    services:
+      ++calls === 1
+        ? new Promise((_, reject) => {
+            failOld = reject;
+          })
+        : Promise.resolve({
+            settings: { readAll: async () => ({ values: {} }) },
+            startup: { whenReady: async () => {} },
+          }),
+    close: () => {
+      closed++;
+    },
+  }));
+  t.after(() => coordinator.disconnect());
+  const old = assert.rejects(
+    coordinator.start(),
+    (error) => error.reason === "stale",
+  );
+  await settle();
+  await coordinator.recover(true);
+  await old;
+  assert.equal(calls, 2);
+  assert.equal(closed, 1);
+  assert.equal(coordinator.diagnostics().cycle.retries, 0);
+  failOld(new Error("late transport failure"));
+  t.mock.timers.tick(3_000);
+  await settle();
+  assert.equal(coordinator.failed, false);
+  assert.equal(coordinator.diagnostics().cycle.retries, 0);
+});
+
+test("fresh manual recovery settles old requests and never replays an in-flight write", async (t) => {
+  let release,
+    reads = 0;
+  const env = setup(t, () =>
+    ++reads === 1
+      ? new Promise((resolve) => {
+          release = resolve;
+        })
+      : { values: { theme: "new" }, configuredValues: {} },
+  );
+  const services = await env.coordinator.start();
+  const old = assert.rejects(
+    env.coordinator.recover(),
+    (error) => error.reason === "stale",
+  );
+  const write = assert.rejects(services.settings.write("theme", "dark"));
+  await settle();
+  await env.coordinator.recover(true);
+  await Promise.all([old, write]);
+  release({ values: { theme: "old" }, configuredValues: {} });
+  await settle();
+  assert.equal(env.writes, 1);
+  assert.equal(env.connections, 2);
+  assert.equal(env.coordinator.diagnostics().pending, 0);
+  assert.equal(env.coordinator.diagnostics().cycle.retries, 0);
+  assert.equal(env.coordinator.failed, false);
+});
+
+test("a native timer firing while suspended neither spends retries nor poisons a replacement recovery", async (t) => {
+  const env = setup(t);
+  await env.coordinator.start();
+  let fail,
+    calls = 0;
+  const native = env.coordinator.nativeRequest("config/read", () => {
+    calls++;
+    return new Promise((_, reject) => {
+      fail = reject;
+    });
+  });
+  const old = assert.rejects(native, (error) => error.reason === "stale");
+  await settle();
+  env.coordinator.suspend();
+  fail(
+    Object.assign(new Error("native deadline"), {
+      name: "AppServerRequestTimeoutError",
+    }),
+  );
+  await settle();
+  t.mock.timers.tick(3_600_000);
+  assert.equal(env.coordinator.failed, false);
+  assert.equal(env.coordinator.diagnostics().cycle.retries, 0);
+  assert.equal(calls, 1);
+  env.coordinator.resetRecovery();
+  await old;
+  env.coordinator.resume();
+  await env.coordinator.recover();
+  assert.equal(calls, 1);
+  assert.equal(env.coordinator.diagnostics().cycle.retries, 0);
+});
+
+test("authentication failure survives automatic lifecycle resets until an explicit retry", async (t) => {
+  const env = setup(t);
+  await env.coordinator.start();
+  env.coordinator.authenticationFailed();
+  env.coordinator.suspend();
+  env.coordinator.resume();
+  assert.equal(env.coordinator.resetRecovery(), false);
+  assert.equal(env.coordinator.authenticationRequired, true);
+  assert.equal(env.coordinator.failed, true);
+  await env.coordinator.recover(true);
+  assert.equal(env.coordinator.authenticationRequired, false);
+  assert.equal(env.coordinator.failed, false);
+  assert.equal(env.connections, 2);
+});
+
+test("cancelling a read queued during suspension rejects without waiting for foreground or dispatching", async (t) => {
+  const env = setup(t);
+  await env.coordinator.start();
+  env.coordinator.suspend();
+  const controller = new AbortController();
+  let calls = 0;
+  const read = env.coordinator.fetchRequest(
+    "vscode://codex/get-global-state",
+    controller.signal,
+    async () => {
+      calls++;
+      return {};
+    },
+  );
+  const cancelled = assert.rejects(read, { name: "AbortError" });
+  controller.abort();
+  await cancelled;
+  assert.equal(calls, 0);
+  assert.equal(env.coordinator.failed, false);
+  env.coordinator.resume();
+  await settle();
+  assert.equal(calls, 0);
+});
+
+test("a resume immediately followed by another suspension does not dispatch queued startup", async (t) => {
+  const env = setup(t);
+  env.coordinator.suspend();
+  const start = env.coordinator.start();
+  env.coordinator.resume();
+  env.coordinator.suspend();
+  await settle();
+  assert.equal(env.connections, 0);
+  env.coordinator.resume();
+  await start;
+  assert.equal(env.connections, 1);
+});
+
+test("late native terminal events from a retired session cannot replace the current configuration state", async (t) => {
+  const env = setup(t);
+  await env.coordinator.start();
+  env.coordinator.observeNative({
+    method: "config/read",
+    id: "old-read",
+    type: "started",
+  });
+  env.coordinator.resetRecovery();
+  await env.coordinator.recover();
+  env.coordinator.observeNative({
+    method: "config/read",
+    id: "new-read",
+    type: "started",
+  });
+  env.coordinator.observeNative({
+    method: "config/read",
+    id: "old-read",
+    type: "timed-out",
+  });
+  assert.equal(
+    env.coordinator.diagnostics().stages.configuration.state,
+    "started",
+  );
+  assert.deepEqual(env.coordinator.diagnostics().requiredFailures, []);
+  env.coordinator.observeNative({
+    method: "config/read",
+    id: "new-read",
+    type: "failed",
+  });
+  assert.equal(
+    env.coordinator.diagnostics().stages.configuration.state,
+    "failed",
+  );
+  assert.deepEqual(env.coordinator.diagnostics().requiredFailures, [
+    "local:config/read",
+  ]);
+  env.coordinator.observeNative({
+    method: "config/read",
+    id: "old-read",
+    type: "completed",
+  });
+  assert.equal(
+    env.coordinator.diagnostics().stages.configuration.state,
+    "failed",
+  );
+});
+
 test("concurrent settings failures share retry rounds and successful reads do not reset their budget", async (t) => {
   const env = setup(t, () => new Promise(() => {}));
   const services = await env.coordinator.start();

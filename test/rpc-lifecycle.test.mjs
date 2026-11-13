@@ -156,3 +156,34 @@ test("request IDs are isolated by host and by tab", () => {
   assert.equal(second.size, 1);
   second.onLifecycle({ type: "completed", hostId: "local", id: "same" });
 });
+
+test("known page suspension preserves remaining bridge read time without replaying requests", () => {
+  let now = 1_000;
+  const delivered = [];
+  const rpc = new RpcLifecycle(
+    (event) => delivered.push(event),
+    () => {},
+    () => now,
+  );
+  rpc.track("one", channel, [
+    {
+      type: "mcp-request",
+      hostId: "local",
+      request: { id: 1, method: "config/read" },
+    },
+  ]);
+  now += 5_000;
+  rpc.suspend();
+  now += 3_600_000;
+  rpc.expire();
+  assert.equal(rpc.size, 1);
+  rpc.resume();
+  now += 9_999;
+  rpc.expire();
+  assert.equal(rpc.size, 1);
+  rpc.resume();
+  now += 1;
+  rpc.expire();
+  assert.equal(rpc.size, 0);
+  assert.equal(delivered.length, 1);
+});

@@ -15,6 +15,8 @@ type Subscription = {
 };
 type Pending = {
   deadline: number;
+  remainingMs?: number;
+  timer?: ReturnType<typeof setTimeout>;
   required: boolean;
   fail(error: Error): void;
 };
@@ -97,7 +99,12 @@ export class AppHostRecovery {
     retries: number;
     waiting?: Promise<void>;
     remainingMs?: number;
+    suspendedRemainingMs?: number;
   };
+  private recoveryEpoch = 0;
+  private resetWaiters = new Set<() => void>();
+  private suspension?: { done: Promise<void>; resume(): void };
+  private authRequired = false;
   private retrying = 0;
   private requiredFailures = new Set<string>();
   private nativeThreads = new Map<string, string | undefined>();
@@ -129,9 +136,76 @@ export class AppHostRecovery {
   get failed() {
     return this.exhausted;
   }
+  get suspended() {
+    return this.suspension !== undefined;
+  }
+  get authenticationRequired() {
+    return this.authRequired;
+  }
   authenticationFailed() {
+    this.authRequired = true;
     this.exhausted = true;
     this.disconnect("authentication");
+  }
+  /** Background/offline time must not use the foreground recovery allowance. */
+  suspend(): void {
+    if (this.suspension) return;
+    let resume!: () => void;
+    const done = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    this.suspension = { done, resume };
+    clearTimeout(this.cycleTimer);
+    if (this.cycle && Number.isFinite(this.cycle.deadline)) {
+      this.cycle.suspendedRemainingMs = Math.max(
+        0,
+        this.cycle.deadline - this.now(),
+      );
+      this.cycle.deadline = Infinity;
+    }
+    for (const request of this.pending) {
+      if (Number.isFinite(request.deadline)) {
+        request.remainingMs = Math.max(0, request.deadline - this.now());
+        request.deadline = Infinity;
+      }
+      clearTimeout(request.timer);
+    }
+    this.record("services", "suspended", this.now());
+  }
+  resume(): void {
+    const suspension = this.suspension;
+    if (!suspension) return;
+    this.suspension = undefined;
+    if (this.cycle?.suspendedRemainingMs != null) {
+      this.cycle.deadline = this.now() + this.cycle.suspendedRemainingMs;
+      this.cycle.suspendedRemainingMs = undefined;
+      this.armCycleDeadline();
+    }
+    for (const request of this.pending) {
+      if (request.remainingMs != null) {
+        request.deadline = this.now() + request.remainingMs;
+        request.remainingMs = undefined;
+        this.armRequestDeadline(request);
+      }
+    }
+    this.record("services", "resumed", this.now());
+    suspension.resume();
+  }
+  /** A user retry or one real lifecycle transition may start a new allowance.
+   * Retire the old callers first so their late failures cannot spend it. */
+  resetRecovery(manual = false): boolean {
+    if (this.authRequired && !manual) return false;
+    this.recoveryEpoch++;
+    for (const cancel of this.resetWaiters) cancel();
+    this.resetWaiters.clear();
+    this.authRequired = false;
+    this.exhausted = false;
+    clearTimeout(this.cycleTimer);
+    this.cycle = undefined;
+    this.connecting = undefined;
+    this.requiredFailures.clear();
+    this.disconnect("retry");
+    return true;
   }
   configure(
     factory: () => Session,
@@ -162,6 +236,17 @@ export class AppHostRecovery {
         .length,
       subscriptions: this.subscriptions.size,
       exhausted: this.exhausted,
+      suspended: this.suspended,
+      authenticationRequired: this.authRequired,
+      cycle: this.cycle
+        ? {
+            retries: this.cycle.retries,
+            remainingMs:
+              this.cycle.suspendedRemainingMs ??
+              this.cycle.remainingMs ??
+              Math.max(0, this.cycle.deadline - this.now()),
+          }
+        : null,
       requiredFailures: [...this.requiredFailures],
       stages: { ...this.stages },
       events: this.events.slice(),
@@ -201,6 +286,15 @@ export class AppHostRecovery {
     // Its result cannot satisfy or invalidate required startup configuration.
     if (event.codexWebOptionalRead) return;
     const key = JSON.stringify([event.hostId ?? "local", event.id]);
+    // Native deadlines can fire after their MessagePort was retired. Request
+    // IDs are UUIDs in the pinned Desktop; only a start in this session owns a
+    // terminal event. Legacy id-less notifications keep their existing path.
+    if (
+      event.type !== "started" &&
+      event.id != null &&
+      !this.nativeThreads.has(key)
+    )
+      return;
     const threadId =
       event.params?.threadId ??
       event.conversationId ??
@@ -211,6 +305,9 @@ export class AppHostRecovery {
     // Desktop preloads other hosts and sidebar conversations during startup.
     // Their missing histories/authentication must fail only their own callers.
     if (!this.requiredNativeRead(event.method!, event.hostId, threadId)) return;
+    // The pinned native client has its own timers. A queued background timeout
+    // is evidence for the next recovery, not a foreground failure notification.
+    if (this.suspended && ["failed", "timed-out"].includes(event.type)) return;
     this.resumeCycle();
     // Native clients also report background reads and write preparation. Their
     // errors belong to the caller, not to a completed startup cycle. In
@@ -359,27 +456,39 @@ export class AppHostRecovery {
     return cycle;
   }
   private resumeCycle() {
+    if (this.suspended) return;
     if (this.cycle?.remainingMs != null) {
       this.cycle.deadline = this.now() + this.cycle.remainingMs;
       this.cycle.remainingMs = undefined;
-      clearTimeout(this.cycleTimer);
-      this.cycleTimer = setTimeout(
-        () => this.checkDeadlines(),
-        Math.max(0, this.cycle.deadline - this.now()),
-      );
+      this.armCycleDeadline();
     }
+  }
+  private armCycleDeadline() {
+    clearTimeout(this.cycleTimer);
+    const cycle = this.cycle;
+    if (!cycle || this.suspended || !Number.isFinite(cycle.deadline)) return;
+    this.cycleTimer = setTimeout(
+      () => {
+        if (this.cycle === cycle) this.checkDeadlines();
+      },
+      Math.max(0, cycle.deadline - this.now()),
+    );
   }
   private beginCycle() {
     if (this.cycle) {
       this.resumeCycle();
       return this.cycle;
     }
-    this.cycle = { deadline: this.now() + 60_000, retries: 0 };
-    clearTimeout(this.cycleTimer);
-    this.cycleTimer = setTimeout(() => this.checkDeadlines(), 60_000);
+    this.cycle = {
+      deadline: this.suspended ? Infinity : this.now() + 60_000,
+      suspendedRemainingMs: this.suspended ? 60_000 : undefined,
+      retries: 0,
+    };
+    this.armCycleDeadline();
     return this.cycle;
   }
   checkDeadlines() {
+    if (this.suspended) return;
     for (const request of [...this.pending]) {
       if (request.deadline <= this.now())
         request.fail(new RecoveryError("services", "timeout"));
@@ -389,6 +498,21 @@ export class AppHostRecovery {
       this.disconnect("timeout");
     }
   }
+  private armRequestDeadline(request: Pending) {
+    clearTimeout(request.timer);
+    if (this.suspended || !Number.isFinite(request.deadline)) return;
+    request.timer = setTimeout(
+      () => {
+        if (
+          !this.suspended &&
+          this.pending.has(request) &&
+          this.now() >= request.deadline
+        )
+          request.fail(new RecoveryError("services", "timeout"));
+      },
+      Math.max(0, request.deadline - this.now()),
+    );
+  }
   private attempt<T>(
     method: string,
     operation: () => PromiseLike<T>,
@@ -397,6 +521,7 @@ export class AppHostRecovery {
     cancel?: () => void,
   ): Promise<T> {
     const generation = this.generation;
+    const epoch = this.recoveryEpoch;
     const start = this.now();
     const deadline = bounded
       ? Math.min(start + 15_000, this.cycle?.deadline ?? Infinity)
@@ -407,7 +532,7 @@ export class AppHostRecovery {
       const finish = (error?: Error, value?: T) => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        clearTimeout(pending.timer);
         this.pending.delete(pending);
         this.record(
           method,
@@ -421,12 +546,18 @@ export class AppHostRecovery {
         );
         if (error) {
           cancel?.();
-          if (close && error instanceof RecoveryError) {
+          if (
+            close &&
+            error instanceof RecoveryError &&
+            epoch === this.recoveryEpoch
+          ) {
             this.disconnect(error.reason);
             // A local RPC deadline can retire AppHost while the WebSocket is
             // still healthy. Reconnecting that one caller is not sufficient:
             // settings, startup and native configuration must be read again.
-            void Promise.resolve().then(() => this.recoveryNeeded?.());
+            void Promise.resolve().then(() => {
+              if (epoch === this.recoveryEpoch) this.recoveryNeeded?.();
+            });
           }
           reject(error);
         } else if (generation !== this.generation)
@@ -439,7 +570,11 @@ export class AppHostRecovery {
         }
       };
       const pending: Pending = {
-        deadline,
+        deadline: this.suspended ? Infinity : deadline,
+        remainingMs:
+          this.suspended && Number.isFinite(deadline)
+            ? Math.max(0, deadline - start)
+            : undefined,
         required: bounded,
         fail: (error) =>
           finish(
@@ -449,13 +584,8 @@ export class AppHostRecovery {
             ),
           ),
       };
-      const timer = Number.isFinite(deadline)
-        ? setTimeout(
-            () => pending.fail(new RecoveryError(method, "timeout")),
-            Math.max(0, deadline - start),
-          )
-        : undefined;
       this.pending.add(pending);
+      this.armRequestDeadline(pending);
       Promise.resolve()
         .then(() => {
           if (done || generation !== this.generation)
@@ -498,6 +628,7 @@ export class AppHostRecovery {
     if (this.current) return Promise.resolve();
     if (this.connecting) return this.connecting;
     const task = (async () => {
+      const epoch = this.recoveryEpoch;
       const cycle = this.budget();
       if (!this.factory) throw new RecoveryError("services", "unavailable");
       this.changed?.("recovering", "services");
@@ -507,7 +638,9 @@ export class AppHostRecovery {
       session.onBroken?.(() => {
         if (this.session === session) {
           this.disconnect("disconnected");
-          void Promise.resolve().then(() => this.recoveryNeeded?.());
+          void Promise.resolve().then(() => {
+            if (epoch === this.recoveryEpoch) this.recoveryNeeded?.();
+          });
         }
       });
       const current = await this.attempt(
@@ -529,8 +662,13 @@ export class AppHostRecovery {
       );
       this.record("services", "connected", this.now());
       if (this.generation > 1) {
-        for (const args of this.catalogSources.values())
+        for (const args of this.catalogSources.values()) {
+          if (session !== this.session)
+            throw new RecoveryError("services", "stale");
           await this.invoke(["localThreadCatalog", "setSourceEnabled"], args);
+        }
+        if (session !== this.session)
+          throw new RecoveryError("services", "stale");
         await Promise.all(
           [...this.subscriptions]
             .filter((entry) => entry.active)
@@ -549,24 +687,59 @@ export class AppHostRecovery {
   }
   private async retry<T>(
     method: string,
-    operation: () => Promise<T>,
+    operation: (checkCurrent: () => void) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> {
+    const epoch = this.recoveryEpoch;
+    let cancel!: () => void;
+    let abort!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      cancel = () => reject(new RecoveryError(method, "stale"));
+      abort = () => reject(signal?.reason);
+    });
+    // Cancellation can arrive during a synchronous disconnect callback, before
+    // the first operation is dispatched. Keep it observed in that interval.
+    void cancelled.catch(() => {});
+    this.resetWaiters.add(cancel);
+    signal?.addEventListener("abort", abort, { once: true });
+    const checkCurrent = () => {
+      if (epoch !== this.recoveryEpoch)
+        throw new RecoveryError(method, "stale");
+      signal?.throwIfAborted();
+    };
+    const active = async () => {
+      checkCurrent();
+      while (this.suspension) {
+        await Promise.race([this.suspension.done, cancelled]);
+        checkCurrent();
+      }
+      checkCurrent();
+    };
     this.retrying++;
     try {
       for (;;) {
-        signal?.throwIfAborted();
+        await active();
         // Routine reads/subscriptions continue after startup. Only an actual
         // disconnect (or initial startup) opens the shared recovery budget.
         // attempt() still bounds these reads and disconnects on transport loss.
         if (!this.everReady || this.cycle || !this.current) this.budget();
         try {
-          return await operation();
+          const value = await Promise.race([
+            operation(checkCurrent),
+            cancelled,
+          ]);
+          checkCurrent();
+          return value;
         } catch (error) {
+          if (epoch !== this.recoveryEpoch)
+            throw new RecoveryError(method, "stale");
           // React/query owners cancel obsolete reads during normal rendering.
           // Preserve cancellation for that caller without exhausting startup.
           if (signal?.aborted) throw error;
           if (this.everReady && !this.cycle && this.current) throw error;
+          // Native RPC timers cannot all be paused by the bridge. Wait for a
+          // usable lifecycle before spending another read retry on their error.
+          if (error instanceof RecoveryError) await active();
           // Application/authorization errors must not turn into synthetic success.
           const cycle = this.budget();
           if (
@@ -587,17 +760,23 @@ export class AppHostRecovery {
               cycle.waiting = undefined;
             });
           }
-          await cycle.waiting;
+          await Promise.race([cycle.waiting, cancelled]);
+          await active();
           this.budget();
         }
       }
     } finally {
+      this.resetWaiters.delete(cancel);
+      signal?.removeEventListener("abort", abort);
       this.retrying--;
       this.maybeReady();
     }
   }
   async start() {
+    const epoch = this.recoveryEpoch;
     await this.retry("services", () => this.connect());
+    if (epoch !== this.recoveryEpoch)
+      throw new RecoveryError("services", "stale");
     return this.facade;
   }
   async fetchRequest<T>(
@@ -637,23 +816,27 @@ export class AppHostRecovery {
     };
     return readonly ? this.retry(method, run, signal) : run();
   }
-  /** Only explicit user retry starts a new budget after exhaustion. */
+  /** Manual retry isolates every pending caller from the previous allowance. */
   async recover(manual = false) {
     if (!this.factory) return;
-    if (manual) {
-      this.exhausted = false;
-      clearTimeout(this.cycleTimer);
-      this.cycle = undefined;
-    }
-    await this.retry("settings.readAll", async () => {
+    if (manual) this.resetRecovery(true);
+    const epoch = this.recoveryEpoch;
+    await this.retry("settings.readAll", async (checkCurrent) => {
       await this.connect();
+      checkCurrent();
       await this.invoke(["settings", "readAll"], []);
+      checkCurrent();
       if (this.current?.startup)
         await this.invoke(["startup", "whenReady"], []);
-      for (const entry of this.subscriptions)
+      checkCurrent();
+      for (const entry of this.subscriptions) {
         if (entry.active && entry.generation !== this.generation)
           await this.attach(entry);
+        checkCurrent();
+      }
     });
+    if (epoch !== this.recoveryEpoch)
+      throw new RecoveryError("services", "stale");
     for (const callback of this.onRestore) callback();
     this.maybeReady();
   }
@@ -760,8 +943,9 @@ export class AppHostRecovery {
         } catch {}
       }
     };
-    const task = this.retry(path.join("."), async () => {
+    const task = this.retry(path.join("."), async (checkCurrent) => {
       await this.connect();
+      checkCurrent();
       await this.attach(entry);
     }).then(
       () => ({ unsubscribe: dispose, [Symbol.dispose]: dispose, onRpcBroken }),
@@ -807,8 +991,9 @@ export class AppHostRecovery {
           }
         }
         const task = READS.has(method)
-          ? this.retry(method, async () => {
+          ? this.retry(method, async (checkCurrent) => {
               await this.connect();
+              checkCurrent();
               return this.invoke(path, args);
             })
           : this.invoke(path, args); // Writes have exactly one delivery attempt.
@@ -834,4 +1019,5 @@ export class AppHostRecovery {
       },
     });
   }
+
 }

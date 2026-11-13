@@ -1,0 +1,54 @@
+--- a/webview/assets/app-initial-1ab6fbe93c4f.js
++++ b/webview/assets/app-initial-1ab6fbe93c4f.js
+@@ -421287,6 +421287,28 @@
+       (v2o = W()));
+   }))();
+ }
++function webConnectionDiagnosticsRailButton() {
++  const locale = zd().locale;
++  const exportDiagnostics = window.__ELECTRON_SHIM__?.exportDiagnostics;
++  if (typeof exportDiagnostics !== `function`) return null;
++  const label = /^zh(?:-|$)/i.test(
++    locale || document.documentElement.lang || navigator.language,
++  )
++    ? `导出诊断`
++    : `Export diagnostics`;
++  return (0, D2.jsx)(Pn, {
++    cloneCustomTrigger: !0,
++    closeOnTriggerClick: !0,
++    tooltipContent: label,
++    side: `right`,
++    children: (0, D2.jsx)(A0o, {
++      "aria-label": label,
++      "data-codex-web-diagnostics-export": ``,
++      onClick: exportDiagnostics,
++      children: (0, D2.jsx)(op, { asset: ije, "aria-hidden": !0 }),
++    }),
++  });
++}
+ function b2o(e) {
+   let t = (0, x2o.c)(25),
+     { compact: n, leading: r, showProfileDivider: i, trailing: a } = e,
+@@ -421348,7 +421370,10 @@
+   let b = o && u,
+     x;
+   t[16] !== y || t[17] !== b || t[18] !== h || t[19] !== g
+-    ? ((x = (0, S2o.jsxs)(`div`, { className: h, children: [g, y, b] })),
++    ? ((x = (0, S2o.jsxs)(`div`, {
++        className: h,
++        children: [g, y, o && (0, S2o.jsx)(webConnectionDiagnosticsRailButton, {}), b],
++      })),
+       (t[16] = y),
+       (t[17] = b),
+       (t[18] = h),
+@@ -421690,7 +421715,9 @@
+       (t[61] !== m || t[62] !== de
+         ? ((e = m
+             ? (0, D2.jsx)(D2.Fragment, { children: (0, D2.jsx)(w2o, {}) })
+-            : de),
++            : (0, D2.jsxs)(D2.Fragment, {
++                children: [(0, D2.jsx)(webConnectionDiagnosticsRailButton, {}), de],
++              })),
+           (t[61] = m),
+           (t[62] = de),
+           (t[63] = e))
