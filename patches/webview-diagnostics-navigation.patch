@@ -22,7 +22,7 @@
 +      "aria-label": label,
 +      "data-codex-web-diagnostics-export": ``,
 +      onClick: exportDiagnostics,
-+      children: (0, D2.jsx)(op, { asset: ije, "aria-hidden": !0 }),
++      children: (0, D2.jsx)(ije, { "aria-hidden": !0 }),
 +    }),
 +  });
 +}

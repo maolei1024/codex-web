@@ -7,6 +7,55 @@ const source = await readFile(
     "scratch/asar/webview/assets/app-initial-1ab6fbe93c4f.js",
   "utf8",
 );
+const shared = await readFile(
+  "scratch/asar/webview/assets/app-shared-8340f229c2b3.js",
+  "utf8",
+);
+const jsx = (type, props) => ({ type, props });
+const compiler = {
+  c: (length) => Array(length).fill(Symbol.for("react.memo_cache_sentinel")),
+};
+
+function sharedFunction(name, next) {
+  const start = shared.indexOf(`function ${name}(`);
+  const end = next
+    ? shared.indexOf(`function ${next}(`, start + 10)
+    : shared.indexOf("function ", start + 10);
+  assert.ok(start >= 0 && end > start, `pinned shared ${name} must exist`);
+  return shared.slice(start, end);
+}
+
+// Resolve the pinned import to its real component factory. `ije` is a React
+// icon component; passing it as op.asset (a preset) crashes the native renderer.
+assert.match(source, /\bd7\s+as\s+ije\b/);
+assert.match(shared, /\bmur\s+as\s+d7\b/);
+assert.match(shared, /\bmur\s*=\s*\$\(i4n\)/);
+const nativeDownloadIcon = new Function(
+  "t",
+  "Q",
+  "Z",
+  "mlr",
+  "glr",
+  "q",
+  "flr",
+  "_lr",
+  "rlr",
+  `let i4n;
+   ${sharedFunction("a4n")}
+   ${sharedFunction("$", "mlr")}
+   ${sharedFunction("llr")}
+   a4n(); return $(i4n);`,
+)(
+  (initialize) => initialize,
+  () => {},
+  (preset) => preset,
+  () => ({ kind: "inline" }), // Geometry is immaterial to the component contract.
+  compiler,
+  (...classes) => classes.filter(Boolean).join(" "),
+  { Icon: "native-icon" },
+  { jsx },
+  "native-svg-renderer",
+);
 
 function nativeFunction(name) {
   const start = source.indexOf(`function ${name}(`);
@@ -17,10 +66,6 @@ function nativeFunction(name) {
 }
 
 function render({ locale = "zh-CN", exportDiagnostics, profile = false } = {}) {
-  const jsx = (type, props) => ({ type, props });
-  const compiler = {
-    c: (length) => Array(length).fill(Symbol.for("react.memo_cache_sentinel")),
-  };
   const state = { get() {}, set() {} };
   const context = {
     window: { __ELECTRON_SHIM__: { exportDiagnostics } },
@@ -37,8 +82,7 @@ function render({ locale = "zh-CN", exportDiagnostics, profile = false } = {}) {
     eg: (...classes) => classes.filter(Boolean).join(" "),
     Pn: "native-tooltip",
     A0o: "native-rail-button",
-    op: "native-icon",
-    ije: "native-download-icon",
+    ije: nativeDownloadIcon,
     Oi: () => state,
     q: "store",
     G: (key) => (key === "profile-enabled" ? profile : false),
@@ -105,7 +149,15 @@ test("navigation export uses the native rail button and tooltip and downloads sy
   assert.equal(button.type, "native-rail-button");
   assert.equal(button.props["aria-label"], "导出诊断");
   assert.equal(button.props.disabled, undefined);
-  assert.equal(button.props.children.props.asset, "native-download-icon");
+  const icon = button.props.children;
+  assert.equal(icon.type, nativeDownloadIcon);
+  assert.equal(typeof icon.type, "function");
+  assert.equal(typeof icon.type.createElement, "function");
+  assert.equal(icon.props.asset, undefined);
+  const renderedIcon = icon.type(icon.props);
+  assert.equal(renderedIcon.type, "native-svg-renderer");
+  assert.equal(renderedIcon.props.preset.name, "arrow-down-open-base-light-20");
+  assert.equal(renderedIcon.props.svgProps["aria-hidden"], true);
   clicking = true;
   button.props.onClick();
   clicking = false;
