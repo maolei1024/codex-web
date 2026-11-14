@@ -31,6 +31,8 @@ const EVENT_TYPES = new Set([
   "socket-connect",
   "socket-open",
   "socket-close",
+  "socket-retire",
+  "recovery-start",
   "socket-error",
   "watchdog-timeout",
   "ping",
@@ -71,6 +73,9 @@ const STATES = new Set([
   "ok",
   "error",
   "configuration",
+  "transport",
+  "session",
+  "synchronizing",
   "requirements",
   "models",
   "history",
@@ -97,6 +102,7 @@ const REASONS = new Set([
   "retry",
   "heartbeat",
   "transport-timeout",
+  "recovery-timeout",
   "timeout",
   "disconnected",
   "stale",
@@ -234,6 +240,7 @@ function eventDetails(value: unknown): RecordValue {
     "attempt",
     "delayMs",
     "elapsedMs",
+    "remainingMs",
     "code",
     "pending",
     "bufferedBytes",
@@ -251,7 +258,7 @@ function eventDetails(value: unknown): RecordValue {
 }
 function trace(value: unknown): RecordValue {
   const source = record(value);
-  const result = numbers(source, ["generation", "elapsedMs", "pending"]);
+  const result = numbers(source, ["at", "generation", "elapsedMs", "pending"]);
   for (const [key, choices] of [
     ["method", METHODS],
     ["phase", STATES],
@@ -455,6 +462,7 @@ export function createConnectionDiagnostics(
       ]),
     };
     booleans(source, connection, [
+      "retryAvailable",
       "recovering",
       "suspended",
       "authenticationFailed",

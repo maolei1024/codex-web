@@ -34,11 +34,20 @@ export async function checkForUpdate(buildId: string) {
   }
 }
 
+export type RecoveryProgress = {
+  attempt: number;
+  phase: "transport" | "session" | "synchronizing";
+  elapsedMs: number;
+  remainingMs: number;
+  retryAvailable: boolean;
+};
+
 export function recoveryNotice(
   state: string,
   method: string,
   retry: () => void,
   exportDiagnostics?: () => void,
+  progress?: RecoveryProgress,
 ) {
   const id = "codex-web-recovery";
   let notice = document.getElementById(id);
@@ -71,7 +80,7 @@ export function recoveryNotice(
   const authentication = state === "failed" && method === "authentication";
   const waiting = state === "waiting-network";
   const paused = state === "paused";
-  const busy = state !== "failed" && !waiting;
+  const busy = state !== "failed" && !waiting && !progress?.retryAvailable;
   const message = notice.querySelector<HTMLElement>("[data-recovery-message]")!;
   const controls = notice.querySelector<HTMLElement>(
     "[data-recovery-controls]",
@@ -96,10 +105,18 @@ export function recoveryNotice(
               "连接恢复已暂停，返回页面后继续。当前内容和草稿仍保留。",
               "Connection recovery is paused until you return. Content and drafts are still here.",
             )
-          : copy(
-              "正在恢复连接，请稍候。当前内容和草稿仍保留。",
-              "Restoring connection. Please wait. Content and drafts are still here.",
-            );
+          : progress
+            ? `${
+                progress.phase === "transport"
+                  ? copy("正在连接服务器", "Connecting to server")
+                  : progress.phase === "session"
+                    ? copy("正在恢复会话", "Restoring session")
+                    : copy("正在同步当前会话", "Syncing current conversation")
+              } · ${Math.floor(progress.elapsedMs / 1000)} / ${Math.ceil((progress.elapsedMs + progress.remainingMs) / 1000)} ${copy("秒", "s")}${copy("。当前内容和草稿仍保留。", ". Content and drafts are still here.")}`
+            : copy(
+                "正在恢复连接，请稍候。当前内容和草稿仍保留。",
+                "Restoring connection. Please wait. Content and drafts are still here.",
+              );
 
   let button = controls.querySelector<HTMLButtonElement>(
     "[data-recovery-retry]",
@@ -118,7 +135,9 @@ export function recoveryNotice(
       ? paused
         ? copy("已暂停", "Paused")
         : copy("正在重连…", "Reconnecting…")
-      : copy("重连", "Reconnect");
+      : progress
+        ? copy("重新尝试", "Try again")
+        : copy("重连", "Reconnect");
     button.onclick = () => {
       if (button!.disabled) return;
       // Update synchronously so repeated taps cannot start parallel attempts.

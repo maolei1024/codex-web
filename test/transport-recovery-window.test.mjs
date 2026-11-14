@@ -53,6 +53,8 @@ test("suspension excludes background time without replenishing spent foreground 
   window.suspend();
   assert.equal(window.active, true);
   assert.deepEqual(window.diagnostics(), {
+    budgetMs: 60_000,
+    elapsedMs: 17_000,
     remainingMs: 43_000,
     failed: false,
     suspended: true,

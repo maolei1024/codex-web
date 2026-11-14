@@ -152,3 +152,38 @@ test("failed exports retain an actionable notice and a later retry succeeds", (t
   assert.doesNotThrow(() => button.onclick());
   assert.equal(button.disabled, false);
 });
+
+test("recovery phases expose elapsed time and a usable takeover without duplicate taps", (t) => {
+  const document = dom(t);
+  let attempts = 0;
+  const retry = () => {
+    attempts++;
+    button.onclick();
+  };
+  const progress = {
+    attempt: 2,
+    phase: "session",
+    elapsedMs: 9_000,
+    remainingMs: 21_000,
+    retryAvailable: false,
+  };
+  recoveryNotice("recovering", "", retry, undefined, progress);
+  const notice = document.getElementById("codex-web-recovery");
+  const button = notice.querySelector("[data-recovery-retry]");
+  assert.ok(notice.textContent.includes("正在恢复会话"));
+  assert.ok(notice.textContent.includes("9 / 30 秒"));
+  assert.equal(button.disabled, true);
+  recoveryNotice("recovering", "", retry, undefined, {
+    ...progress,
+    phase: "synchronizing",
+    elapsedMs: 10_000,
+    remainingMs: 20_000,
+    retryAvailable: true,
+  });
+  assert.ok(notice.textContent.includes("正在同步当前会话"));
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "重新尝试");
+  button.onclick();
+  assert.equal(attempts, 1);
+  assert.equal(button.disabled, true);
+});

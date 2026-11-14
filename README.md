@@ -185,15 +185,20 @@ timeouts. Events contain methods, phases, durations and counts, never request
 arguments, messages, drafts, credentials or feature-assignment payloads.
 
 Browser recovery pauses its timers while the page is hidden, frozen or reporting
-offline. Returning to the foreground probes a healthy connection afresh, or starts
-one new bounded recovery attempt for an interrupted connection. WebSocket connection
-attempts have their own 60-second foreground allowance with exponential backoff;
-configuration reads start after the socket opens and retain their separate bounded
-read retries. A visible page checks the connection every 20 seconds. Manual retry
-retires the previous attempt and shows its progress immediately; repeated taps do
-not create parallel connections. An offline hint can still be overridden by manual
-retry. Authentication failures require signing in again. Recovery never replays
-user writes or reloads the editor.
+offline. Returning probes an open connection afresh and continues pending requests,
+handshakes, backoff and service recovery without replacing their attempt. After the
+page has become ready, transport and required session recovery share one 30-second
+foreground allowance; switching tabs or reaching a new phase never replenishes it.
+Initial startup retains its existing 60-second transport/read allowances. A visible
+page checks the connection every 20 seconds. Automatic recovery shows its phase and
+elapsed time after two seconds and allows manual takeover after ten seconds. Manual
+retry retires the previous attempt and shows progress immediately; repeated taps do
+not create parallel connections. Expiry stops automatic retries until manual retry
+or a subsequent offline-to-online transition; ordinary foreground events cannot
+restart an expired attempt. An offline hint can still be overridden by manual retry.
+Authentication failures require signing in again. Recovery never replays user writes
+or reloads the editor. Diagnostics include timestamped AppHost events, recovery
+attempts, phases and socket retirement reasons, without repeated unchanged states.
 
 Choose **Export diagnostics** above the settings/profile button at the bottom of
 the navigation rail, or in the recovery notice, to download a local JSON report,

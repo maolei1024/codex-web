@@ -21,6 +21,7 @@ type Pending = {
   fail(error: Error): void;
 };
 export type RecoveryEvent = {
+  at: number;
   generation: number;
   method: string;
   phase: string;
@@ -191,7 +192,7 @@ export class AppHostRecovery {
     this.record("services", "resumed", this.now());
     suspension.resume();
   }
-  /** A user retry or one real lifecycle transition may start a new allowance.
+  /** A user retry or a new offline-to-online transition may start an allowance.
    * Retire the old callers first so their late failures cannot spend it. */
   resetRecovery(manual = false): boolean {
     if (this.authRequired && !manual) return false;
@@ -206,6 +207,18 @@ export class AppHostRecovery {
     this.requiredFailures.clear();
     this.disconnect("retry");
     return true;
+  }
+  /** The page's shared recovery allowance also bounds transport + service work. */
+  expireRecovery(): void {
+    if (this.exhausted) return;
+    this.recoveryEpoch++;
+    for (const cancel of this.resetWaiters) cancel();
+    this.resetWaiters.clear();
+    clearTimeout(this.cycleTimer);
+    this.cycle = undefined;
+    this.connecting = undefined;
+    this.exhausted = true;
+    this.disconnect("timeout");
   }
   configure(
     factory: () => Session,
@@ -425,6 +438,7 @@ export class AppHostRecovery {
   }
   private record(method: string, phase: string, start: number, reason = "") {
     this.events.push({
+      at: this.now(),
       generation: this.generation,
       method,
       phase,
@@ -1019,5 +1033,4 @@ export class AppHostRecovery {
       },
     });
   }
-
 }

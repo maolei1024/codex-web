@@ -1,4 +1,4 @@
-/** Bounds foreground transport retries without spending AppHost read retries. */
+/** One foreground allowance; established pages share it across transport and AppHost. */
 export class TransportRecoveryWindow {
   private running = false;
   private exhausted = false;
@@ -11,7 +11,7 @@ export class TransportRecoveryWindow {
   constructor(
     private readonly onTimeout: () => void,
     private readonly now: () => number = Date.now,
-    private readonly budgetMs = 60_000,
+    private budgetMs = 60_000,
   ) {
     if (!Number.isFinite(budgetMs) || budgetMs <= 0)
       throw new RangeError(
@@ -28,8 +28,11 @@ export class TransportRecoveryWindow {
     return this.running;
   }
 
-  start(): void {
+  start(budgetMs = this.budgetMs): void {
     if (this.running || this.exhausted) return;
+    if (!Number.isFinite(budgetMs) || budgetMs <= 0)
+      throw new RangeError("Recovery budget must be positive and finite");
+    this.budgetMs = budgetMs;
     this.running = true;
     this.remainingMs = this.budgetMs;
     if (!this.suspended) this.arm();
@@ -42,10 +45,10 @@ export class TransportRecoveryWindow {
     this.remainingMs = this.budgetMs;
   }
 
-  reset(): void {
+  reset(budgetMs = this.budgetMs): void {
     this.stop();
     this.exhausted = false;
-    this.start();
+    this.start(budgetMs);
   }
 
   suspend(): void {
@@ -83,6 +86,8 @@ export class TransportRecoveryWindow {
 
   diagnostics() {
     return {
+      budgetMs: this.budgetMs,
+      elapsedMs: this.budgetMs - this.remaining(),
       remainingMs: this.remaining(),
       failed: this.exhausted,
       suspended: this.suspended,

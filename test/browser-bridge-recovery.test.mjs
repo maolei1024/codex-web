@@ -770,7 +770,7 @@ test("returning from the background while offline exposes retry without spending
   assert.equal(bridge.sockets.length, 2);
 });
 
-test("manual retry and a real foreground transition can immediately replace a delayed attempt", (t) => {
+test("manual retry replaces a delayed attempt but foreground resumes its remaining backoff", (t) => {
   const bridge = setup(t);
   bridge.sockets[0].close();
   bridge.notices.at(-1)[2]();
@@ -778,9 +778,9 @@ test("manual retry and a real foreground transition can immediately replace a de
   bridge.sockets.at(-1).close();
   bridge.hide();
   bridge.show();
-  assert.equal(bridge.sockets.length, 3);
+  assert.equal(bridge.sockets.length, 2);
   t.mock.timers.tick(500);
-  assert.equal(bridge.sockets.length, 3, "cancelled backoff cannot replace it");
+  assert.equal(bridge.sockets.length, 3, "the original backoff resumes once");
 });
 
 test("a delayed close releases an AppHost handshake before a healthy replacement resumes it", async (t) => {
@@ -1026,4 +1026,306 @@ test("manual retry retires calls queued while offline even when no socket remain
     socket.sent.some((message) => message.channel === "test:mutation"),
     false,
   );
+});
+
+// Use configureAppHost, including its production state callback. Tests calling
+// AppHost.configure directly cannot exercise page readiness or the shared budget.
+async function readyBridge(t, sessionFactory) {
+  const bridge = setup(t);
+  const shim = bridge.window.__ELECTRON_SHIM__;
+  let sessions = 0;
+  const base = {
+    settings: { readAll: async () => ({}) },
+    startup: { whenReady: async () => {} },
+  };
+  const first = bridge.sockets[0];
+  first.open();
+  const boot = shim.configureAppHost(() => {
+    const index = ++sessions;
+    return (
+      sessionFactory?.(index, base) ?? {
+        services: Promise.resolve(base),
+        close() {},
+      }
+    );
+  });
+  await flush();
+  const snapshot = first.sent.find(
+    (x) => x.channel === "codex_desktop:get-shared-object-snapshot",
+  );
+  assert.ok(snapshot);
+  first.receive({
+    type: "ipc-renderer-invoke-result",
+    requestId: snapshot.requestId,
+    ok: true,
+    result: {},
+  });
+  const services = await boot;
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  const configured = () => {
+    for (const method of [
+      "config/read",
+      "configRequirements/read",
+      "model/list",
+    ])
+      shim.appHost.observeNative({ method, type: "completed" });
+  };
+  configured();
+  assert.equal(shim.diagnostics().connection.state, "connected");
+  return { ...bridge, shim, services, configured, sessions: () => sessions };
+}
+
+function answerPing(socket) {
+  const ping = socket.sent.findLast((x) => x.type === "bridge-ping");
+  if (ping) socket.receive({ type: "bridge-pong", requestId: ping.requestId });
+}
+
+test("short tab switches preserve healthy pending work and do not flood connected diagnostics", async (t) => {
+  const bridge = await readyBridge(t);
+  let finish;
+  const request = bridge.shim.appHost.fetchRequest(
+    "vscode://codex/http-fetch",
+    undefined,
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await flush();
+  const before = bridge.shim.diagnostics();
+  assert.equal(before.appHost.pending, 1);
+  const noticeCount = bridge.notices.length;
+  for (let i = 0; i < 10; i++) {
+    bridge.hide();
+    t.mock.timers.tick(300);
+    bridge.show();
+    answerPing(bridge.sockets[0]);
+    await flush();
+  }
+  const after = bridge.shim.diagnostics();
+  assert.equal(bridge.sockets.length, 1);
+  assert.equal(after.appHost.generation, before.appHost.generation);
+  assert.equal(after.appHost.pending, 1);
+  assert.ok(
+    bridge.notices.slice(noticeCount).every((x) => x[0] === "connected"),
+  );
+  finish("same request");
+  assert.equal(await request, "same request");
+  for (let i = 0; i < 10; i++) await bridge.services.settings.readAll();
+  bridge.shim.exportDiagnostics();
+  const report = JSON.parse(await bridge.downloads.at(-1).text());
+  assert.equal(
+    report.events.filter(
+      (x) => x.type === "recovery-state" && x.state === "connected",
+    ).length,
+    1,
+  );
+  assert.ok(
+    report.diagnostics.appHost.events.every((x) => Number.isFinite(x.at)),
+  );
+});
+
+test("tab switches preserve an in-flight handshake and service recovery with the same 30 second allowance", async (t) => {
+  let finishServices;
+  const bridge = await readyBridge(t, (index, base) => ({
+    services:
+      index === 1
+        ? Promise.resolve(base)
+        : new Promise((resolve) => {
+            finishServices = () => resolve(base);
+          }),
+    close() {},
+  }));
+  bridge.sockets[0].close();
+  assert.equal(
+    bridge.notices.at(-1)[0],
+    "connected",
+    "brief recovery is quiet",
+  );
+  t.mock.timers.tick(500);
+  const socket = bridge.sockets.at(-1);
+  t.mock.timers.tick(1_500);
+  assert.equal(bridge.notices.at(-1)[0], "connecting");
+  const attempt = bridge.shim.diagnostics().connection.attempt;
+  bridge.hide();
+  t.mock.timers.tick(60_000);
+  bridge.show();
+  assert.equal(bridge.sockets.at(-1), socket);
+  assert.equal(bridge.shim.diagnostics().connection.remainingMs, 28_000);
+  socket.open();
+  await flush();
+  assert.equal(bridge.sessions(), 2);
+  const generation = bridge.shim.appHost.generation;
+  for (let i = 0; i < 3; i++) {
+    t.mock.timers.tick(1_000);
+    bridge.hide();
+    t.mock.timers.tick(320);
+    bridge.show();
+    answerPing(socket);
+    await flush();
+  }
+  assert.equal(bridge.sockets.length, 2);
+  assert.equal(bridge.sessions(), 2);
+  assert.equal(bridge.shim.appHost.generation, generation);
+  assert.equal(bridge.shim.diagnostics().connection.attempt, attempt);
+  assert.equal(bridge.shim.diagnostics().connection.remainingMs, 25_000);
+  finishServices();
+  await flush();
+  bridge.configured();
+  await flush();
+  assert.equal(bridge.shim.diagnostics().connection.state, "connected");
+});
+
+test("transport and session recovery share one deadline, and only a new online edge restarts expiry", async (t) => {
+  const bridge = await readyBridge(t);
+  bridge.sockets[0].close();
+  // Spend 20 seconds on failed handshakes, then finish the transport only.
+  for (let i = 0; i < 20; i++) {
+    t.mock.timers.tick(1_000);
+    await flush();
+  }
+  bridge.sockets.at(-1).open();
+  await flush();
+  assert.equal(bridge.shim.diagnostics().connection.remainingMs, 10_000);
+  assert.notEqual(bridge.shim.diagnostics().connection.state, "connected");
+  for (let i = 0; i < 10; i++) {
+    t.mock.timers.tick(1_000);
+    answerPing(bridge.sockets.at(-1));
+    await flush();
+  }
+  assert.equal(bridge.shim.diagnostics().connection.state, "failed");
+  assert.equal(bridge.shim.appHost.failed, true);
+  const count = bridge.sockets.length;
+  bridge.hide();
+  t.mock.timers.tick(60_000);
+  bridge.show();
+  bridge.online();
+  assert.equal(
+    bridge.sockets.length,
+    count,
+    "visibility and duplicate online cannot reset failure",
+  );
+  bridge.configured();
+  await flush();
+  assert.equal(
+    bridge.shim.diagnostics().connection.state,
+    "failed",
+    "late completion cannot revive expiry",
+  );
+  bridge.offline();
+  bridge.online();
+  bridge.online();
+  bridge.show();
+  assert.equal(bridge.sockets.length, count + 1);
+  assert.equal(bridge.shim.diagnostics().connection.remainingMs, 30_000);
+  bridge.sockets.at(-1).open();
+  await flush();
+  bridge.configured();
+  await flush();
+  assert.equal(bridge.shim.diagnostics().connection.state, "connected");
+});
+
+test("a connection opened while hidden resumes AppHost exactly once on return", async (t) => {
+  const bridge = await readyBridge(t);
+  bridge.sockets[0].close();
+  t.mock.timers.tick(500);
+  bridge.hide();
+  bridge.sockets.at(-1).open();
+  await flush();
+  assert.equal(bridge.sessions(), 1);
+  bridge.show();
+  answerPing(bridge.sockets.at(-1));
+  await flush();
+  assert.equal(bridge.sessions(), 2);
+  bridge.configured();
+  await flush();
+  assert.equal(bridge.shim.diagnostics().connection.state, "connected");
+});
+
+test("manual takeover unlocks after ten seconds and cancels old service work once", async (t) => {
+  let finishOld;
+  const bridge = await readyBridge(t, (index, base) => ({
+    services:
+      index === 2
+        ? new Promise((resolve) => {
+            finishOld = () => resolve(base);
+          })
+        : Promise.resolve(base),
+    close() {},
+  }));
+  bridge.sockets[0].close();
+  t.mock.timers.tick(500);
+  bridge.sockets.at(-1).open();
+  await flush();
+  t.mock.timers.tick(1_500);
+  const retry = bridge.notices.at(-1)[2];
+  retry();
+  assert.equal(bridge.sockets.length, 2);
+  t.mock.timers.tick(8_000);
+  await flush();
+  assert.equal(bridge.notices.at(-1)[4].retryAvailable, true);
+  retry();
+  retry();
+  retry();
+  await flush();
+  assert.equal(bridge.sockets.length, 3);
+  assert.equal(bridge.shim.diagnostics().connection.remainingMs, 30_000);
+  bridge.sockets.at(-1).open();
+  await flush();
+  bridge.configured();
+  await flush();
+  finishOld();
+  await flush();
+  assert.equal(bridge.shim.diagnostics().connection.state, "connected");
+  assert.equal(bridge.sessions(), 3);
+});
+
+test("online recovery never bypasses authentication failure", async (t) => {
+  const bridge = await readyBridge(t);
+  bridge.sockets[0].close();
+  t.mock.timers.tick(500);
+  bridge.sockets.at(-1).open();
+  await flush();
+  bridge.shim.appHost.authenticationFailed();
+  const count = bridge.sockets.length;
+  bridge.offline();
+  bridge.online();
+  bridge.hide();
+  bridge.show();
+  assert.equal(bridge.shim.appHost.authenticationRequired, true);
+  assert.equal(bridge.sockets.length, count);
+  t.mock.timers.tick(60_000);
+  await flush();
+  assert.equal(bridge.notices.at(-1)[1], "authentication");
+});
+
+test("offline pauses an established recovery without renewing it, while manual probing consumes its fresh allowance", async (t) => {
+  const bridge = await readyBridge(t);
+  bridge.sockets[0].close();
+  t.mock.timers.tick(4_000);
+  await flush();
+  bridge.offline();
+  const state = bridge.shim.diagnostics().connection;
+  t.mock.timers.tick(600_000);
+  bridge.hide();
+  bridge.show();
+  assert.equal(bridge.shim.diagnostics().connection.remainingMs, 26_000);
+  bridge.online();
+  assert.equal(bridge.shim.diagnostics().connection.attempt, state.attempt);
+  assert.equal(bridge.shim.diagnostics().connection.remainingMs, 26_000);
+  bridge.offline();
+  bridge.notices.at(-1)[2]();
+  assert.equal(bridge.shim.diagnostics().connection.remainingMs, 30_000);
+  assert.equal(bridge.shim.diagnostics().connection.suspended, false);
+  assert.equal(
+    bridge.notices.at(-1)[0],
+    "connecting",
+    "manual progress is immediate",
+  );
+  for (let i = 0; i < 30; i++) {
+    t.mock.timers.tick(1_000);
+    await flush();
+  }
+  assert.equal(bridge.shim.diagnostics().connection.state, "failed");
 });

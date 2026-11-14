@@ -199,6 +199,8 @@ let sharedObjectHttp: SharedObjectHttpClient | null = null;
 let binaryReadHttp: BinaryReadHttpClient | null = null;
 let oversizedLogReported = false;
 let reconnectTimeoutId: number | null = null;
+let reconnectDueAt = 0;
+let reconnectRemainingMs: number | null = null;
 let reconnectAttempt = 0;
 let consecutiveConnectFailures = 0;
 let authProbeInFlight = false;
@@ -213,13 +215,22 @@ let transportSuspended = false;
 let lastManualRetry = -Infinity;
 let recoverAfterOpen = false;
 let connectionState = "connecting";
+let connectionMethod = "";
+let pageWasReady = false;
+let onlineRetryPending = false;
+let noticeTimer: number | undefined;
+let immediateRecoveryNotice = false;
+let lastRecordedState = "";
 const connectionDiagnostics = createConnectionDiagnostics();
 const transportWindow = new TransportRecoveryWindow(() => {
   connectionDiagnostics.record("watchdog-timeout", {
-    reason: "connect-timeout",
+    reason: "recovery-timeout",
     generation: socketGeneration,
   });
-  retireSocket();
+  recoveryEpoch++;
+  recoveringAppHost = undefined;
+  appHostRecovery.expireRecovery();
+  retireSocket("recovery-timeout");
   showConnectionState("failed");
   collectServerDiagnostics();
 });
@@ -476,8 +487,10 @@ function scheduleReconnect(): void {
   if (reconnectTimeoutId !== null) {
     return;
   }
-  const delay = reconnectDelayMs(reconnectAttempt);
-  reconnectAttempt += 1;
+  const delay = reconnectRemainingMs ?? reconnectDelayMs(reconnectAttempt);
+  if (reconnectRemainingMs === null) reconnectAttempt += 1;
+  reconnectRemainingMs = null;
+  reconnectDueAt = Date.now() + delay;
   connectionDiagnostics.record("reconnect-scheduled", {
     attempt: reconnectAttempt,
     delayMs: delay,
@@ -494,17 +507,33 @@ function reconnectNow(): void {
     window.clearTimeout(reconnectTimeoutId);
     reconnectTimeoutId = null;
   }
+  reconnectRemainingMs = null;
   ensureSocket();
 }
 
-function retireSocket(): void {
+function startRecoveryWindow(): void {
+  if (transportWindow.active || transportWindow.failed) return;
+  immediateRecoveryNotice = false;
+  recoveryEpoch++;
+  transportWindow.start(pageWasReady ? 30_000 : 60_000);
+  if (transportSuspended) transportWindow.suspend();
+  connectionDiagnostics.record("recovery-start", { attempt: recoveryEpoch });
+}
+
+function retireSocket(reason = "disconnected"): void {
   if (retiringSocket) return;
   retiringSocket = true;
   try {
     appHostRecovery.suspend();
     rpcLifecycle.suspend();
-    transportWindow.start();
+    startRecoveryWindow();
     const previousSocket = socket;
+    if (previousSocket)
+      connectionDiagnostics.record("socket-retire", {
+        reason,
+        generation: socketGeneration,
+        attempt: recoveryEpoch,
+      });
     socket = null;
     sharedObjectHttp?.close();
     sharedObjectHttp = null;
@@ -523,8 +552,8 @@ function retireSocket(): void {
   }
 }
 
-function forceReconnect(): void {
-  retireSocket();
+function forceReconnect(reason = "send-failed"): void {
+  retireSocket(reason);
   reconnectNow();
 }
 
@@ -551,12 +580,87 @@ function probeConnection(): void {
 }
 
 function showConnectionState(state: string, method = ""): void {
+  if (state === "failed" && method === "authentication") {
+    transportWindow.stop();
+    onlineRetryPending = false;
+  }
+  if (state === "connected") {
+    if (!transportWindow.check() || appHostRecovery.failed) return;
+    pageWasReady = true;
+    transportWindow.connected();
+  } else if (
+    pageWasReady &&
+    (state === "recovering" || state === "connecting")
+  ) {
+    if (transportWindow.failed) return;
+    startRecoveryWindow();
+  }
   connectionState = state;
-  connectionDiagnostics.record("recovery-state", {
-    state,
-    generation: socketGeneration,
-  });
-  recoveryNotice(state, method, manualReconnect, exportConnectionDiagnostics);
+  connectionMethod = method;
+  const key = `${state}:${method}:${socketGeneration}:${recoveryEpoch}`;
+  if (key !== lastRecordedState) {
+    lastRecordedState = key;
+    connectionDiagnostics.record("recovery-state", {
+      state,
+      reason: method,
+      generation: socketGeneration,
+      attempt: recoveryEpoch,
+    });
+  }
+  renderRecoveryNotice();
+}
+
+function recoveryProgress() {
+  const budget = transportWindow.diagnostics();
+  const stages = appHostRecovery.diagnostics().stages;
+  const sessionReady =
+    stages.services?.state === "connected" &&
+    ["settings.readAll", "startup.whenReady"].every(
+      (key) => stages[key]?.state === "ok",
+    );
+  return {
+    attempt: recoveryEpoch,
+    phase:
+      socket?.readyState !== WebSocket.OPEN
+        ? ("transport" as const)
+        : sessionReady
+          ? ("synchronizing" as const)
+          : ("session" as const),
+    elapsedMs: budget.elapsedMs,
+    remainingMs: budget.remainingMs,
+    retryAvailable:
+      connectionState === "failed" ||
+      connectionState === "waiting-network" ||
+      (pageWasReady && budget.elapsedMs >= 10_000),
+  };
+}
+
+function renderRecoveryNotice(): void {
+  window.clearTimeout(noticeTimer);
+  noticeTimer = undefined;
+  const progress = recoveryProgress();
+  const busy =
+    connectionState === "connecting" || connectionState === "recovering";
+  const quiet =
+    pageWasReady &&
+    busy &&
+    !immediateRecoveryNotice &&
+    progress.elapsedMs < 2_000;
+  recoveryNotice(
+    quiet ? "connected" : connectionState,
+    connectionMethod,
+    manualReconnect,
+    exportConnectionDiagnostics,
+    pageWasReady ? progress : undefined,
+  );
+  if (busy && !transportSuspended && !transportWindow.failed) {
+    noticeTimer = window.setTimeout(
+      () => {
+        if (transportWindow.check()) renderRecoveryNotice();
+      },
+      quiet ? 2_000 - progress.elapsedMs : 1_000,
+    );
+  }
 }
 
 function connectionSnapshot() {
@@ -573,6 +677,7 @@ function connectionSnapshot() {
     recoveryRemainingMs: appHostRecovery.diagnostics().cycle?.remainingMs,
     online: !offlineHint,
     visibility: document.visibilityState,
+    ...recoveryProgress(),
   };
 }
 
@@ -624,9 +729,10 @@ function restartRecovery(manual = false): void {
   if (!manual && appHostRecovery.authenticationRequired) return;
   recoveryEpoch++;
   recoveringAppHost = undefined;
-  retireSocket();
+  retireSocket(manual ? "manual" : "online");
   if (!appHostRecovery.resetRecovery(manual)) return;
-  transportWindow.reset();
+  transportWindow.reset(pageWasReady ? 30_000 : 60_000);
+  immediateRecoveryNotice = manual;
   if (!transportSuspended) transportWindow.resume();
   recoverAfterOpen = true;
   reconnectAttempt = 0;
@@ -637,11 +743,19 @@ function restartRecovery(manual = false): void {
 function manualReconnect(): void {
   // One tap owns a complete bounded attempt, including the radio/VPN warm-up.
   if (Date.now() - lastManualRetry < 1_000) return;
+  if (appHostRecovery.authenticationRequired) return;
+  if (
+    pageWasReady &&
+    transportWindow.active &&
+    !recoveryProgress().retryAvailable
+  )
+    return;
   lastManualRetry = Date.now();
   connectionDiagnostics.record("manual-retry", {
     generation: socketGeneration,
   });
   manualNetworkOverride = true;
+  onlineRetryPending = false;
   if (pageHidden || pageFrozen) return;
   transportSuspended = false;
   restartRecovery(true);
@@ -676,9 +790,14 @@ function updateLifecycle(): void {
   if (paused === transportSuspended) return;
   transportSuspended = paused;
   if (paused) {
+    window.clearTimeout(noticeTimer);
+    noticeTimer = undefined;
     window.clearTimeout(heartbeatTimer);
     heartbeatTimer = undefined;
-    if (reconnectTimeoutId !== null) window.clearTimeout(reconnectTimeoutId);
+    if (reconnectTimeoutId !== null) {
+      reconnectRemainingMs = Math.max(0, reconnectDueAt - Date.now());
+      window.clearTimeout(reconnectTimeoutId);
+    }
     reconnectTimeoutId = null;
     appHostRecovery.suspend();
     rpcLifecycle.suspend();
@@ -687,23 +806,55 @@ function updateLifecycle(): void {
     return;
   }
   // Handle the lifecycle transition before inspecting old wall-clock deadlines.
-  const diagnostics = appHostRecovery.diagnostics();
-  const needsRecovery =
-    transportWindow.failed ||
-    appHostRecovery.failed ||
-    diagnostics.cycle != null ||
-    diagnostics.pending > 0 ||
-    socket?.readyState !== WebSocket.OPEN;
+  connectionDiagnostics.record("resume", {
+    reason: "visible",
+    attempt: recoveryEpoch,
+  });
   transportWindow.resume();
   connectionWatchdog?.resume();
-  if (needsRecovery) restartRecovery();
-  else {
+  if (retryAfterOnline()) return;
+  if (transportWindow.failed || appHostRecovery.failed) {
+    showConnectionState(
+      "failed",
+      appHostRecovery.authenticationRequired ? "authentication" : "exhausted",
+    );
+    return;
+  }
+  if (socket?.readyState === WebSocket.OPEN) {
     appHostRecovery.resume();
     rpcLifecycle.resume();
     probeConnection();
-    if (connectionState === "waiting-network") showConnectionState("connected");
+    if (
+      recoverAfterOpen ||
+      (pageWasReady && appHostRecovery.diagnostics().cycle)
+    ) {
+      recoverAfterOpen = false;
+      recoverAppHost();
+    }
+    if (connectionState === "waiting-network")
+      showConnectionState(
+        appHostRecovery.diagnostics().cycle ? "recovering" : "connected",
+      );
+  } else {
+    if (reconnectRemainingMs !== null) scheduleReconnect();
+    else ensureSocket();
+    showConnectionState("connecting");
   }
+  renderRecoveryNotice();
   scheduleHeartbeat();
+}
+
+function retryAfterOnline(): boolean {
+  if (!onlineRetryPending || transportSuspended) return false;
+  onlineRetryPending = false;
+  if (
+    appHostRecovery.authenticationRequired ||
+    (!transportWindow.failed && !appHostRecovery.failed)
+  )
+    return false;
+  restartRecovery();
+  scheduleHeartbeat();
+  return true;
 }
 
 function maybeProbeAuthFailure(): void {
@@ -763,7 +914,7 @@ function ensureSocket(): void {
 
   appHostRecovery.suspend();
   rpcLifecycle.suspend();
-  transportWindow.start();
+  startRecoveryWindow();
 
   sharedObjectHttp?.close();
   binaryReadHttp?.close();
@@ -797,7 +948,7 @@ function ensureSocket(): void {
       generation,
       reason: opened ? "pong-timeout" : "connect-timeout",
     });
-    forceReconnect();
+    forceReconnect(opened ? "pong-timeout" : "connect-timeout");
   });
   let opened = false;
 
@@ -805,7 +956,8 @@ function ensureSocket(): void {
     if (socket !== currentSocket || transportWindow.failed) {
       return;
     }
-    transportWindow.connected();
+    if (pageWasReady) transportWindow.check();
+    else transportWindow.connected();
     if (socket !== currentSocket || transportWindow.failed) return;
     if (!transportSuspended) {
       appHostRecovery.resume();
@@ -852,10 +1004,10 @@ function ensureSocket(): void {
         () => {},
       );
       scheduleReconnectRecovery();
-      recoverAppHost();
+      recoverAfterOpen = true;
     }
     hasConnectedBefore = true;
-    if (recoverAfterOpen) {
+    if (recoverAfterOpen && !transportSuspended) {
       recoverAfterOpen = false;
       recoverAppHost();
     }
@@ -890,7 +1042,7 @@ function ensureSocket(): void {
       consecutiveConnectFailures += 1;
       maybeProbeAuthFailure();
     }
-    retireSocket();
+    retireSocket("close");
     if (!transportSuspended && !appHostRecovery.failed)
       showConnectionState("connecting");
     scheduleReconnect();
@@ -1442,14 +1594,18 @@ installBrowserFileUploadBridge();
 installMobileViewportGuard();
 
 window.addEventListener("online", () => {
+  if (offlineHint && (transportWindow.failed || appHostRecovery.failed))
+    onlineRetryPending = true;
   offlineHint = false;
   manualNetworkOverride = false;
   connectionDiagnostics.record("online");
   const wasSuspended = transportSuspended;
   updateLifecycle();
+  retryAfterOnline();
   if (!wasSuspended) probeConnection();
 });
 window.addEventListener("offline", () => {
+  onlineRetryPending = false;
   offlineHint = true;
   manualNetworkOverride = false;
   connectionDiagnostics.record("offline");
