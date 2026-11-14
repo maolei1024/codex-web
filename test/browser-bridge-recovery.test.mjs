@@ -144,7 +144,12 @@ function setup(t, { pathname = "/", search = "" } = {}) {
     __CODEX_APP_VERSION__: "test",
     __CODEX_WEB_BUILD_ID__: "test",
     require: (name) =>
-      modules[name] ??
+      (name === "./reconnect"
+        ? {
+            reconnectDelayMs: (attempt) =>
+              modules[name].reconnectDelayMs(attempt, () => 0.5),
+          }
+        : modules[name]) ??
       {
         "./routes": routes,
         "./files": {
@@ -389,6 +394,7 @@ test("real bridge rejects native requests even after IPC ack, and never replays 
   const offline = client.sendRequest("turn/steer", {}, { trace: null });
   await assert.rejects(offline, (error) => error.delivery.stage === "not-sent");
   bridge.foreground();
+  t.mock.timers.tick(500);
   bridge.sockets.at(-1).open();
   assert.equal(
     bridge.sockets.at(-1).sent.filter((event) => event.args?.[0]?.request)
@@ -594,6 +600,7 @@ test("reconnection replays subscriptions before recovery and suppresses duplicat
     });
   first.close();
   bridge.foreground();
+  t.mock.timers.tick(500);
   const second = bridge.sockets.at(-1);
   second.open();
   assert.equal(second.sent[0].args[0].type, "shared-object-subscribe");
@@ -616,6 +623,211 @@ const flush = async () => {
   for (let i = 0; i < 60; i++) await Promise.resolve();
 };
 
+test("background IPC and repeated probes respect the current reconnect delay", async (t) => {
+  const bridge = setup(t);
+  for (const delay of [500, 1_000, 2_000]) {
+    bridge.sockets.at(-1).close();
+    const count = bridge.sockets.length;
+    for (let i = 0; i < 5; i++) {
+      bridge.ipc.send("test:background", {});
+      assert.equal(bridge.sockets.length, count);
+      bridge.foreground();
+      bridge.pageshow();
+      await bridge.ipc
+        .invoke(channel, {
+          type: "fetch",
+          url: "vscode://codex/read-file-binary",
+          requestId: `binary-${count}-${i}`,
+        })
+        .catch(() => {});
+      await bridge.ipc
+        .invoke(channel, {
+          type: "shared-object-set",
+          key: "statsig_evaluations",
+          value: {},
+        })
+        .catch(() => {});
+    }
+    assert.equal(bridge.sockets.length, count);
+    t.mock.timers.tick(delay - 1);
+    bridge.foreground();
+    assert.equal(bridge.sockets.length, count);
+    t.mock.timers.tick(1);
+    assert.equal(bridge.sockets.length, count + 1);
+  }
+});
+
+for (const readyState of [2, 3]) {
+  test(`a socket at state ${readyState} is retired before a late close can lose its pending native calls`, async (t) => {
+    const bridge = setup(t),
+      client = await clientFor(bridge),
+      first = bridge.sockets[0];
+    first.open();
+    const request = client.sendRequest("configRequirements/read", undefined, {
+      trace: null,
+    });
+    const rejected = assert.rejects(request, /Connection interrupted/);
+    first.receive({
+      type: "ipc-renderer-invoke-result",
+      requestId: first.sent[0].requestId,
+      ok: true,
+    });
+    // The browser changes readyState before dispatching the close event.
+    first.readyState = readyState;
+    first.close = () => {};
+    bridge.ipc.send("test:background", {});
+    assert.equal(bridge.sockets.length, 1);
+    await rejected;
+    assert.equal(client.getPendingRequestCount(), 0);
+    assert.equal(
+      bridge.window.__ELECTRON_SHIM__.diagnostics().pendingAppRequests,
+      0,
+    );
+    t.mock.timers.tick(500);
+    const second = bridge.sockets.at(-1);
+    assert.notEqual(second, first);
+    second.open();
+    first.fire("close");
+    first.fire("error");
+    bridge.foreground();
+    assert.equal(second.sent.at(-1).type, "bridge-ping");
+    assert.equal(
+      second.sent.some((event) => event.args?.[0]?.request),
+      false,
+      "the retired read is never replayed by the bridge",
+    );
+  });
+}
+
+test("heartbeat retires an established closing socket even when its close event never arrives", (t) => {
+  const bridge = setup(t),
+    first = bridge.sockets[0];
+  first.open();
+  first.readyState = 2;
+  first.close = () => {};
+  t.mock.timers.tick(20_000);
+  assert.equal(bridge.sockets.length, 1);
+  t.mock.timers.tick(499);
+  assert.equal(bridge.sockets.length, 1);
+  t.mock.timers.tick(1);
+  assert.equal(bridge.sockets.length, 2);
+});
+
+for (const closingBeforeEvent of [false, true]) {
+  test(`synchronous disconnect cleanup respects backoff with close event delayed=${closingBeforeEvent}`, (t) => {
+    const bridge = setup(t),
+      first = bridge.sockets[0];
+    first.open();
+    let cleanups = 0;
+    bridge.window.__ELECTRON_SHIM__.appHost.onDisconnected(() => {
+      cleanups++;
+      bridge.ipc.send("test:release-old-reference", {});
+    });
+    if (closingBeforeEvent) {
+      first.readyState = 2;
+      first.close = () => {};
+      bridge.ipc.send("test:background", {});
+    } else first.close();
+    assert.equal(cleanups, 1);
+    assert.equal(bridge.sockets.length, 1);
+    assert.equal(bridge.window.__ELECTRON_SHIM__.diagnostics().sendQueue, 0);
+    t.mock.timers.tick(499);
+    assert.equal(bridge.sockets.length, 1);
+    t.mock.timers.tick(1);
+    assert.equal(bridge.sockets.length, 2);
+    const second = bridge.sockets.at(-1);
+    second.open();
+    first.fire("close");
+    assert.equal(cleanups, 1);
+    assert.equal(
+      second.sent.some(
+        (message) => message.channel === "test:release-old-reference",
+      ),
+      false,
+    );
+  });
+}
+
+test("returning from the background while offline exposes retry without spending the recovery budget", (t) => {
+  const bridge = setup(t);
+  bridge.sockets[0].open();
+  bridge.hide();
+  bridge.offline();
+  bridge.sockets[0].close();
+  t.mock.timers.tick(120_000);
+  bridge.show();
+  assert.equal(bridge.notices.at(-1)?.[0], "waiting-network");
+  const state = bridge.window.__ELECTRON_SHIM__.diagnostics();
+  assert.equal(state.connection.suspended, true);
+  assert.equal(state.connection.transportRemainingMs, 60_000);
+  assert.equal(state.appHost.exhausted, false);
+  assert.equal(bridge.sockets.length, 1);
+  const retry = bridge.notices.at(-1)[2];
+  retry();
+  assert.equal(bridge.notices.at(-1)[0], "connecting");
+  assert.equal(bridge.sockets.length, 2);
+  retry();
+  assert.equal(bridge.sockets.length, 2);
+});
+
+test("manual retry and a real foreground transition can immediately replace a delayed attempt", (t) => {
+  const bridge = setup(t);
+  bridge.sockets[0].close();
+  bridge.notices.at(-1)[2]();
+  assert.equal(bridge.sockets.length, 2);
+  bridge.sockets.at(-1).close();
+  bridge.hide();
+  bridge.show();
+  assert.equal(bridge.sockets.length, 3);
+  t.mock.timers.tick(500);
+  assert.equal(bridge.sockets.length, 3, "cancelled backoff cannot replace it");
+});
+
+test("a delayed close releases an AppHost handshake before a healthy replacement resumes it", async (t) => {
+  const bridge = setup(t),
+    first = bridge.sockets[0],
+    recovery = bridge.window.__ELECTRON_SHIM__.appHost;
+  first.open();
+  let sessions = 0,
+    closed = 0,
+    finishOld;
+  recovery.configure(() => ({
+    services:
+      ++sessions === 1
+        ? new Promise((resolve) => {
+            finishOld = resolve;
+          })
+        : Promise.resolve({
+            settings: { readAll: async () => ({ restored: true }) },
+            startup: { whenReady: async () => {} },
+          }),
+    close: () => closed++,
+  }));
+  const boot = recovery.start();
+  await flush();
+  assert.equal(recovery.diagnostics().requiredPending, 1);
+  first.readyState = 2;
+  first.close = () => {};
+  bridge.ipc.send("test:background", {});
+  await flush();
+  assert.equal(closed, 1);
+  assert.equal(recovery.diagnostics().requiredPending, 0);
+  assert.equal(recovery.suspended, true);
+  t.mock.timers.tick(500);
+  bridge.sockets.at(-1).open();
+  await flush();
+  t.mock.timers.tick(1_000);
+  const services = await boot;
+  assert.equal(sessions, 2);
+  assert.equal((await services.settings.readAll()).restored, true);
+  const generation = recovery.generation;
+  finishOld({ settings: { readAll: async () => ({ stale: true }) } });
+  first.fire("close");
+  await flush();
+  assert.equal(recovery.generation, generation);
+  assert.equal((await services.settings.readAll()).restored, true);
+});
+
 function configureRecovery(bridge) {
   const recovery = bridge.window.__ELECTRON_SHIM__.appHost;
   let sessions = 0;
@@ -636,9 +848,9 @@ test("fast handshake failures wait for the network without spending application 
   const bridge = setup(t),
     { recovery, sessions } = configureRecovery(bridge);
   const boot = recovery.start();
-  for (let i = 0; i < 8; i++) {
+  for (const delay of [500, 1_000, 2_000, 4_000, 8_000, 15_000]) {
     bridge.sockets.at(-1).close();
-    t.mock.timers.tick(1_000);
+    t.mock.timers.tick(delay);
     bridge.foreground();
     await flush();
   }
@@ -666,9 +878,9 @@ test("network recovery is bounded and repeated manual taps own one fresh attempt
   retry();
   assert.equal(bridge.sockets.length, count + 1);
   assert.equal(bridge.notices.at(-1)[0], "connecting");
-  for (let i = 0; i < 6; i++) {
+  for (const delay of [500, 1_000, 2_000, 4_000, 8_000, 15_000]) {
     bridge.sockets.at(-1).close();
-    t.mock.timers.tick(1_000);
+    t.mock.timers.tick(delay);
     bridge.foreground();
     await flush();
   }

@@ -194,6 +194,7 @@ declare const __CODEX_WEB_BUILD_ID__: string;
 
 let requestCounter = 0;
 let socket: WebSocket | null = null;
+let retiringSocket = false;
 let sharedObjectHttp: SharedObjectHttpClient | null = null;
 let binaryReadHttp: BinaryReadHttpClient | null = null;
 let oversizedLogReported = false;
@@ -497,22 +498,29 @@ function reconnectNow(): void {
 }
 
 function retireSocket(): void {
-  appHostRecovery.suspend();
-  rpcLifecycle.suspend();
-  transportWindow.start();
-  const previousSocket = socket;
-  socket = null;
-  sharedObjectHttp?.close();
-  sharedObjectHttp = null;
-  binaryReadHttp?.close();
-  binaryReadHttp = null;
-  connectionWatchdog?.stop();
-  connectionWatchdog = null;
-  if (previousSocket) electronShim.threadCache?.connectionChanged();
-  // Calls queued during a reconnect delay also belong to the retired attempt.
-  closeMessagePorts();
-  failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
-  previousSocket?.close();
+  if (retiringSocket) return;
+  retiringSocket = true;
+  try {
+    appHostRecovery.suspend();
+    rpcLifecycle.suspend();
+    transportWindow.start();
+    const previousSocket = socket;
+    socket = null;
+    sharedObjectHttp?.close();
+    sharedObjectHttp = null;
+    binaryReadHttp?.close();
+    binaryReadHttp = null;
+    connectionWatchdog?.stop();
+    connectionWatchdog = null;
+    if (previousSocket) electronShim.threadCache?.connectionChanged();
+    // Native cleanup can synchronously enqueue IPC. It still belongs to the
+    // retired attempt and cannot create a replacement before cleanup finishes.
+    closeMessagePorts();
+    failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
+    previousSocket?.close();
+  } finally {
+    retiringSocket = false;
+  }
 }
 
 function forceReconnect(): void {
@@ -528,7 +536,7 @@ function probeConnection(): void {
   rpcLifecycle.expire();
   if (appHostRecovery.failed) return;
   if (connectionWatchdog && !connectionWatchdog.check()) return;
-  reconnectNow();
+  ensureSocket();
   if (socket?.readyState !== WebSocket.OPEN) return;
   const currentSocket = socket;
   const requestId = nextRequestId();
@@ -655,6 +663,16 @@ function scheduleHeartbeat(): void {
 function updateLifecycle(): void {
   const paused =
     pageHidden || pageFrozen || (offlineHint && !manualNetworkOverride);
+  // Returning to an offline page changes its notice even if transport stays
+  // suspended. Keep the retry action available without restarting its budget.
+  if (
+    paused &&
+    offlineHint &&
+    !pageHidden &&
+    !pageFrozen &&
+    connectionState !== "waiting-network"
+  )
+    showConnectionState("waiting-network");
   if (paused === transportSuspended) return;
   transportSuspended = paused;
   if (paused) {
@@ -666,8 +684,6 @@ function updateLifecycle(): void {
     rpcLifecycle.suspend();
     connectionWatchdog?.suspend();
     transportWindow.suspend();
-    if (offlineHint && !pageHidden && !pageFrozen)
-      showConnectionState("waiting-network");
     return;
   }
   // Handle the lifecycle transition before inspecting old wall-clock deadlines.
@@ -721,15 +737,29 @@ function maybeProbeAuthFailure(): void {
 }
 
 function ensureSocket(): void {
-  if (appHostRecovery.failed || transportWindow.failed || transportSuspended)
-    return;
   if (
-    socket &&
-    (socket.readyState === WebSocket.OPEN ||
-      socket.readyState === WebSocket.CONNECTING)
-  ) {
+    retiringSocket ||
+    appHostRecovery.failed ||
+    transportWindow.failed ||
+    transportSuspended
+  )
+    return;
+  if (socket) {
+    if (
+      socket.readyState === WebSocket.OPEN ||
+      socket.readyState === WebSocket.CONNECTING
+    )
+      return;
+    // readyState changes before the browser dispatches close. Retire the old
+    // MessagePorts and pending calls before any replacement owns this slot.
+    // The heartbeat also reaches this path if close never arrives.
+    retireSocket();
+    scheduleReconnect();
     return;
   }
+  // Background IPC and probes share the same backoff as the close handler.
+  // Only an explicit recovery transition may cancel that scheduled delay.
+  if (reconnectTimeoutId !== null) return;
 
   appHostRecovery.suspend();
   rpcLifecycle.suspend();
@@ -856,21 +886,11 @@ function ensureSocket(): void {
       wasClean: event.wasClean,
       elapsedMs: Date.now() - startedAt,
     });
-    socket = null;
-    electronShim.threadCache?.connectionChanged();
-    sharedObjectHttp = null;
-    binaryReadHttp = null;
-    connectionWatchdog?.stop();
-    connectionWatchdog = null;
-    appHostRecovery.suspend();
-    rpcLifecycle.suspend();
-    transportWindow.start();
     if (!opened) {
       consecutiveConnectFailures += 1;
       maybeProbeAuthFailure();
     }
-    closeMessagePorts();
-    failPendingRequests(new Error(DISCONNECT_ERROR_MESSAGE));
+    retireSocket();
     if (!transportSuspended && !appHostRecovery.failed)
       showConnectionState("connecting");
     scheduleReconnect();
