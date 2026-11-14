@@ -71,7 +71,7 @@ function render({ locale = "zh-CN", exportDiagnostics, profile = false } = {}) {
     window: { __ELECTRON_SHIM__: { exportDiagnostics } },
     navigator: { language: "en-US", onLine: false },
     document: { documentElement: { lang: "en" } },
-    D2: { jsx, jsxs: jsx, Fragment: "fragment" },
+    nativeRuntime: { jsx, jsxs: jsx, Fragment: "fragment" },
     S2o: { jsx, jsxs: jsx },
     N2o: compiler,
     x2o: compiler,
@@ -115,10 +115,16 @@ function render({ locale = "zh-CN", exportDiagnostics, profile = false } = {}) {
   };
   return new Function(
     ...Object.keys(context),
-    `${nativeFunction("webConnectionDiagnosticsRailButton")}
+    `let D2;
+     function F2o() { D2 = nativeRuntime; }
+     ${nativeFunction("webConnectionDiagnosticsRailButton")}
      ${nativeFunction("b2o")}
      ${nativeFunction("O2o")}
-     return { button: webConnectionDiagnosticsRailButton, footer: b2o, rail: O2o };`,
+     return {
+       button: webConnectionDiagnosticsRailButton,
+       footer: b2o,
+       rail(props) { F2o(); return O2o(props); }
+     };`,
   )(...Object.values(context));
 }
 
@@ -171,7 +177,7 @@ test("the compact footer places exactly one export immediately above the profile
     leading: "profile",
     trailing: "usage",
   });
-  const controls = footer.props.children[1].props.children;
+  const controls = footer.props.children.at(-1).props.children;
   assert.equal(controls[1].props.children, "usage");
   assert.equal(controls[2].type, native.button);
   assert.equal(controls[3].props.children, "profile");
@@ -179,6 +185,14 @@ test("the compact footer places exactly one export immediately above the profile
     elements(footer, (node) => node.type === native.button).length,
     1,
   );
+});
+
+test("the legacy sidebar exports directly above Settings or the profile when feature configuration falls back", () => {
+  // The legacy sidebar does not mount O2o. Its export must initialize the
+  // pinned rail controls before using their JSX runtime and button factory.
+  assert.match(nativeFunction("F2o"), /N0o\(\)/);
+  assert.match(nativeFunction("F2o"), /D2\s*=\s*W\(\)/);
+  const native = render({ exportDiagnostics() {} });
   const expanded = native.footer({
     compact: false,
     leading: "profile",
@@ -186,8 +200,15 @@ test("the compact footer places exactly one export immediately above the profile
   });
   assert.equal(
     elements(expanded, (node) => node.type === native.button).length,
-    0,
+    1,
   );
+  assert.equal(expanded.props["data-codex-web-diagnostics-footer"], "");
+  const [, exportRow, profileRow] = expanded.props.children;
+  assert.equal(exportRow.props.children.type, native.button);
+  assert.equal(profileRow.props.children[0].props.children, "profile");
+  assert.equal(profileRow.props.children[1].props.children, "usage");
+  const unavailable = render().footer({ leading: "profile" });
+  assert.equal(unavailable.props.children[1], false);
 });
 
 test("the settings fallback sits directly after export, while profile and custom footers stay intact", () => {

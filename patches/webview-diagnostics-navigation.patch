@@ -1,10 +1,11 @@
 --- a/webview/assets/app-initial-1ab6fbe93c4f.js
 +++ b/webview/assets/app-initial-1ab6fbe93c4f.js
-@@ -421287,6 +421287,28 @@
+@@ -421287,6 +421287,29 @@
        (v2o = W()));
    }))();
  }
 +function webConnectionDiagnosticsRailButton() {
++  F2o();
 +  const locale = zd().locale;
 +  const exportDiagnostics = window.__ELECTRON_SHIM__?.exportDiagnostics;
 +  if (typeof exportDiagnostics !== `function`) return null;
@@ -29,7 +30,7 @@
  function b2o(e) {
    let t = (0, x2o.c)(25),
      { compact: n, leading: r, showProfileDivider: i, trailing: a } = e,
-@@ -421348,7 +421370,10 @@
+@@ -421348,7 +421371,10 @@
    let b = o && u,
      x;
    t[16] !== y || t[17] !== b || t[18] !== h || t[19] !== g
@@ -41,7 +42,29 @@
        (t[16] = y),
        (t[17] = b),
        (t[18] = h),
-@@ -421690,7 +421715,9 @@
+@@ -421362,7 +421388,20 @@
+   let S;
+   return (
+     t[21] !== x || t[22] !== f || t[23] !== p
+-      ? ((S = (0, S2o.jsxs)(`div`, { className: f, children: [p, x] })),
++      ? ((S = (0, S2o.jsxs)(`div`, {
++          className: f,
++          "data-codex-web-diagnostics-footer": !o ? `` : void 0,
++          children: [
++            p,
++            !o &&
++              typeof window.__ELECTRON_SHIM__?.exportDiagnostics === `function` &&
++              (0, S2o.jsx)(`div`, {
++                className: `flex items-center px-row-x py-1`,
++                children: (0, S2o.jsx)(webConnectionDiagnosticsRailButton, {}),
++              }),
++            x,
++          ],
++        })),
+         (t[21] = x),
+         (t[22] = f),
+         (t[23] = p),
+@@ -421690,7 +421729,9 @@
        (t[61] !== m || t[62] !== de
          ? ((e = m
              ? (0, D2.jsx)(D2.Fragment, { children: (0, D2.jsx)(w2o, {}) })
