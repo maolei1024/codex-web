@@ -87,6 +87,27 @@ function closeWebSocket(socket) {
   });
 }
 
+test("diagnostic endpoint preserves old fields, requires auth, and isolates selected connection evidence", async () => {
+  const app = await startIpcBridgeServer(options(), { launchDesktopApp: false });
+  const base = `http://127.0.0.1:${app.server.address().port}`, clientId = randomUUID(), otherId = randomUUID();
+  let socket;
+  try {
+    assert.equal((await fetch(`${base}/__backend/diagnostics`)).status, 401);
+    socket = await openWebSocket(base.replace("http:", "ws:") + `/__backend/ipc?token=${TOKEN}&sharedObjectHttp=1&clientId=${clientId}`);
+    const read = async (query = "") => {
+      const response = await fetch(`${base}/__backend/diagnostics${query}`, { headers: { cookie: `codex_web_token=${TOKEN}` } });
+      assert.equal(response.status, 200); return response.json();
+    };
+    const legacy = await read(); assert.equal(typeof legacy.ports, "number"); assert.equal(legacy.connections, 1);
+    assert.equal(legacy.evidence.selected, false);
+    const selected = await read(`?clientId=${clientId}`); assert.equal(selected.evidence.status, "available");
+    assert.equal(selected.evidence.connection.connections, 1); assert.equal(selected.evidence.selected, true);
+    const other = await read(`?clientId=${otherId}`); assert.equal(other.evidence.status, "missing");
+    assert.equal(other.evidence.events.length, 0);
+    const text = JSON.stringify(selected); assert.ok(!text.includes(TOKEN)); assert.ok(!text.includes(clientId));
+  } finally { if (socket) await closeWebSocket(socket); await app.close(); }
+});
+
 test("authenticated liveness replies stay on the requesting socket and bypass Desktop", async () => {
   const app = await startIpcBridgeServer(options(), {
     launchDesktopApp: false,

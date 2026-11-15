@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import { importTypescriptModule } from "./import-typescript-module.mjs";
+const { DiagnosticJournal } = await importTypescriptModule("src/browser/diagnostic-journal.ts");
+const { DiagnosticRuntime } = await importTypescriptModule("src/browser/diagnostic-runtime.ts");
 
 const primary = await readFile(
   "scratch/asar/webview/assets/app-primary-2a670e99a60c.js",
@@ -21,7 +24,9 @@ function nativeFunction(name, end, source = primary) {
   return prefix + source.slice(start, start + match.index);
 }
 
-test("native early submit failure reports the error and releases its real submission lock", async () => {
+test("native early submit failure records its operation, preserves draft, and releases its real submission lock", async (t) => {
+  const journal = new DiagnosticJournal(), diagnosticRuntime = new DiagnosticRuntime(journal);
+  t.after(() => journal.dispose());
   const state = new Map(),
     scope = {
       value: { kind: "local", placement: "main", clientThreadId: null },
@@ -35,6 +40,7 @@ test("native early submit failure reports the error and releases its real submis
     started = 0;
   const expected = Error("[codex-web:transport] Configuration read timed out.");
   const context = {
+    window: { __ELECTRON_SHIM__: { diagnosticRuntime } },
     ir: () => scope,
     ic: {},
     yE: {},
@@ -98,6 +104,12 @@ test("native early submit failure reports the error and releases its real submis
   assert.equal(cleared, 0);
   assert.equal(started, 0);
   assert.deepEqual(draft, { text: "keep this draft", images: ["test-image"] });
+  const report = journal.snapshot();
+  assert.equal(report.operations.length, 1);
+  assert.equal(report.operations[0].outcome, "not-sent");
+  assert.equal(report.operations[0].locked, false);
+  assert.ok(report.errors.events.some((e) => e.operationId === report.operations[0].id));
+  assert.ok(!JSON.stringify(report).includes(draft.text));
 });
 
 test("native deferred submit cancels on config failure and cannot revive when config recovers", async () => {

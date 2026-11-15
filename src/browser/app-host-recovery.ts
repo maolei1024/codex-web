@@ -89,6 +89,10 @@ export const STARTUP_FETCH_READS = new Set([
 ]);
 
 export class AppHostRecovery {
+  diagnosticObserver?: (phase: string, details: Record<string, unknown>, error?: unknown) => string | undefined;
+  private diagnostic(phase: string, details: Record<string, unknown>, error?: unknown) {
+    try { return this.diagnosticObserver?.(phase, details, error); } catch { return undefined; }
+  }
   generation = 0;
   private factory?: () => Session;
   private session?: Session;
@@ -396,7 +400,22 @@ export class AppHostRecovery {
     hostId?: string,
     params?: { threadId?: string },
     optionalRead = false,
+    operationId?: string,
   ): Promise<T> {
+    const id = this.diagnostic("begin", { method, layer: "apphost", hostId, threadId: params?.threadId,
+      required: !optionalRead && this.requiredNativeRead(method, hostId, params?.threadId) && (!this.everReady || !!this.cycle),
+      remainingMs: this.cycle ? (Number.isFinite(this.cycle.deadline) ? Math.max(0, this.cycle.deadline - this.now()) : this.cycle.remainingMs) : null,
+      optional: optionalRead, operationId });
+    try {
+      const value = await this.runNativeRequest(method, operation, hostId, params, optionalRead);
+      this.diagnostic("end", { id, method, layer: "apphost", operationId });
+      return value;
+    } catch (error) {
+      this.diagnostic("end", { id, method, layer: "apphost", operationId }, error);
+      throw error;
+    }
+  }
+  private async runNativeRequest<T>(method: string, operation: (timeoutMs?: number) => Promise<T>, hostId?: string, params?: { threadId?: string }, optionalRead = false): Promise<T> {
     // Once ready, a read preparing a user write fails back to that caller. It
     // must never keep a pending send alive until a later automatic recovery.
     if (
@@ -437,6 +456,7 @@ export class AppHostRecovery {
     });
   }
   private record(method: string, phase: string, start: number, reason = "") {
+    this.diagnostic("stage", { method, phase, reason, elapsedMs: this.now() - start, generation: this.generation });
     this.events.push({
       at: this.now(),
       generation: this.generation,
@@ -537,6 +557,7 @@ export class AppHostRecovery {
     const generation = this.generation;
     const epoch = this.recoveryEpoch;
     const start = this.now();
+    const diagnosticId = this.diagnostic("begin", { method, layer: "apphost", required: bounded, generation, remainingMs: bounded ? 15_000 : null });
     const deadline = bounded
       ? Math.min(start + 15_000, this.cycle?.deadline ?? Infinity)
       : Infinity;
@@ -546,6 +567,7 @@ export class AppHostRecovery {
       const finish = (error?: Error, value?: T) => {
         if (done) return;
         done = true;
+        this.diagnostic("end", { id: diagnosticId, method, layer: "apphost", generation }, error);
         clearTimeout(pending.timer);
         this.pending.delete(pending);
         this.record(

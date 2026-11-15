@@ -83,7 +83,7 @@ test("offline export is synchronous and includes useful state without a server",
     generation: 4,
   });
   const report = JSON.parse(collector.serialize(input));
-  assert.equal(report.schemaVersion, 1);
+  assert.equal(report.schemaVersion, 2);
   assert.equal(report.buildId, buildId);
   assert.equal(report.browser.family, "safari");
   assert.equal(report.browser.majorVersion, 18);

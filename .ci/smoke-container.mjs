@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
@@ -72,12 +73,16 @@ await writeFile(
 );
 const clients = new Set();
 async function connectClient(headers) {
-  const socket = new WebSocket("ws://127.0.0.1:18214/__backend/ipc", {
-    headers,
-  });
+  const clientId = randomUUID();
+  const socket = new WebSocket(
+    `ws://127.0.0.1:18214/__backend/ipc?sharedObjectHttp=1&clientId=${clientId}`,
+    {
+      headers,
+    },
+  );
   const events = new EventEmitter();
   const receiver = new Reassembler();
-  const client = { socket, events };
+  const client = { socket, events, clientId };
   clients.add(client);
   socket.on("error", (error) => events.emit("failure", error));
   socket.on("close", () => {
@@ -322,6 +327,34 @@ try {
     readGlobalState(client, "a-reconnected"),
     readGlobalState(second, "b-after-a-close"),
   ]);
+  const diagnosticResponse = await fetch(
+    `${url}/__backend/diagnostics?clientId=${client.clientId}`,
+    { headers },
+  );
+  assert.equal(diagnosticResponse.status, 200);
+  const diagnostic = await diagnosticResponse.json();
+  assert.equal(diagnostic.evidence.status, "available");
+  const records = diagnostic.evidence.events;
+  const read = records.find(
+    (e) => e.method === "get-global-state" && e.phase === "received",
+  );
+  assert.ok(read, "real native fetch reception must be recorded");
+  for (const phase of ["begin", "end", "reply", "enqueue", "dequeue"])
+    assert.ok(
+      records.some((e) => e.requestId === read.requestId && e.phase === phase),
+      `native fetch ${phase}`,
+    );
+  const serialized = JSON.stringify(diagnostic);
+  for (const secret of [
+    client.clientId,
+    "container-smoke-only",
+    "electron-saved-workspace-roots",
+    ...workspaceRoots,
+  ])
+    assert.ok(
+      !serialized.includes(secret),
+      "server evidence must be sanitized before export",
+    );
   // Exercise the same extracted RPC engine as Chrome, not merely IPC thread/list.
   const rpc = await nativeAppHostRuntime();
   const { port1, port2 } = new MessageChannel();

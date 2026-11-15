@@ -44,9 +44,12 @@ type AckWait = {
   transferId: string;
   sequence: number;
   deliveredAt: number;
+  deliveredMono: number;
+  requestId?: string | number;
   timer: ReturnType<typeof setTimeout>;
 };
 type ConnectionState = {
+  ackTimeouts: number;
   parent: () => object;
   deliver: (channel: string, args: unknown[], prepared?: boolean) => void;
   fail: (reason: string) => void;
@@ -57,6 +60,7 @@ type ConnectionState = {
   waits: Map<NativeRendererSender, AckWait>;
 };
 type PrepareHooks = {
+  diagnostic?: (connection: RendererConnection, details: Record<string, unknown>, message?: NativeRendererMessage) => void;
   prepareGlobal?: (
     message: NativeRendererMessage,
     owner?: RendererConnection,
@@ -91,6 +95,14 @@ const READ_ONLY_FETCHES = new Set([
 
 /** Native window identity is shared; delivery queues and ACKs belong to a socket. */
 export class RendererConnectionHub {
+  private diagnostic(connection: RendererConnection, details: Record<string, unknown>, message?: NativeRendererMessage) {
+    try { this.hooks.diagnostic?.(connection, details, message); } catch {}
+  }
+  requestDiagnostic(target: object, event: unknown, phase: string) {
+    const owner = this.ownerOf(target);
+    if (owner) this.diagnostic(owner, { phase, layer: "ipc" }, { channel: "diagnostic", payload: event });
+  }
+  private queuedAt = new WeakMap<object, Map<RendererConnection, number>>();
   private sequence = 0;
   private connections = new Set<RendererConnection>();
   private states = new WeakMap<RendererConnection, ConnectionState>();
@@ -127,6 +139,7 @@ export class RendererConnectionHub {
       fail,
       beforeClose,
       closing: false,
+      ackTimeouts: 0,
       closed: false,
       destroyed: new Map(),
       waits: new Map(),
@@ -214,6 +227,12 @@ export class RendererConnectionHub {
         this.hooks.prepareConnection?.(connection, prepared) ??
         (this.hooks.prepareConnection ? null : prepared);
       if (!scoped) continue;
+      let timestamps = this.queuedAt.get(scoped);
+      if (!timestamps) this.queuedAt.set(scoped, timestamps = new Map());
+      timestamps.set(connection, performance.now());
+      this.diagnostic(connection, { phase: "enqueue", priority: mode,
+        queuedMessages: (native.targets.get(connection.sender)?.messages.length ?? 0) + (mode === "critical" ? 0 : 1),
+        criticalQueuedMessages: (native.targets.get(connection.sender)?.criticalMessages.length ?? 0) + (mode === "critical" ? 1 : 0) }, scoped);
       this.senders.add(native);
       if (mode === "critical") native.sendCritical(connection.sender, scoped);
       else if (mode === "inline") native.sendInline(connection.sender, scoped);
@@ -230,10 +249,17 @@ export class RendererConnectionHub {
   ): void {
     const owner = this.ownerOf(target);
     if (!owner || owner.closed || this.destroyed(target)) return;
+    const started = this.queuedAt.get(message)?.get(owner);
+    const dequeue = !part || part.kind === "start";
+    this.diagnostic(owner, { phase: dequeue ? "dequeue" : "chunk", queueWaitMs: dequeue && started != null ? performance.now() - started : undefined,
+      transferId: part?.transferId,
+      sequence: part?.sequence, queuedMessages: native.targets.get(owner.sender)?.messages.length ?? 0,
+      criticalQueuedMessages: native.targets.get(owner.sender)?.criticalMessages.length ?? 0 }, message);
+    if (!part || part.kind === "end") this.queuedAt.get(message)?.delete(owner);
     this.states
       .get(owner)!
       .deliver(message.channel, [part ?? message.payload], true);
-    this.delivered(native, target, part);
+    this.delivered(native, target, part, message);
   }
 
   /** Called only after the actual native part was delivered successfully. */
@@ -241,6 +267,7 @@ export class RendererConnectionHub {
     native: NativeRendererSender,
     target: object,
     part: NativePart | null,
+    message?: NativeRendererMessage,
   ): void {
     if (!part) return;
     const owner = this.ownerOf(target);
@@ -251,6 +278,8 @@ export class RendererConnectionHub {
       transferId: part.transferId,
       sequence: part.sequence,
       deliveredAt: Date.now(),
+      deliveredMono: performance.now(),
+      requestId: (message?.payload as any)?.requestId ?? (message?.payload as any)?.message?.id ?? (message?.payload as any)?.id,
       timer: setTimeout(() => {
         if (owner.closed || state.waits.get(native) !== wait) return;
         const transfer = native.targets.get(owner.sender)?.transfer;
@@ -264,6 +293,7 @@ export class RendererConnectionHub {
           return;
         }
         this.ackTimeouts++;
+        state.ackTimeouts++;
         this.closeConnection(owner);
         try {
           state.fail("Native message acknowledgement timed out");
@@ -294,6 +324,8 @@ export class RendererConnectionHub {
       transfer.part?.sequence !== sequence
     )
       return;
+    const wait = this.states.get(owner)!.waits.get(native);
+    this.diagnostic(owner, { phase: "ack", sequence, transferId, ackWaitMs: wait ? performance.now() - wait.deliveredMono : undefined }, { channel: "ack", payload: { requestId: wait?.requestId } });
     this.clearWait(this.states.get(owner)!, native);
     native.acknowledge(owner.sender, transferId, sequence);
   }
@@ -329,14 +361,15 @@ export class RendererConnectionHub {
     return remove;
   }
 
-  diagnostics() {
+  diagnostics(selected?: RendererConnection) {
     let targets = 0,
       queuedMessages = 0,
       criticalQueuedMessages = 0;
     let pendingTransfers = 0,
-      oldestAckWaitMs = 0;
+      oldestAckWaitMs = 0, oldestQueueWaitMs = 0;
     const now = Date.now();
     for (const connection of this.connections) {
+      if (selected && connection !== selected) continue;
       const state = this.states.get(connection)!;
       for (const native of this.senders) {
         const target = native.targets.get(connection.sender);
@@ -344,19 +377,24 @@ export class RendererConnectionHub {
         targets++;
         queuedMessages += target.messages.length;
         criticalQueuedMessages += target.criticalMessages.length;
+        for (const message of [...target.messages, ...target.criticalMessages]) {
+          const start = message && typeof message === "object" ? this.queuedAt.get(message)?.get(connection) : undefined;
+          if (start != null) oldestQueueWaitMs = Math.max(oldestQueueWaitMs, performance.now() - start);
+        }
         if (target.transfer) pendingTransfers++;
       }
       for (const wait of state.waits.values())
         oldestAckWaitMs = Math.max(oldestAckWaitMs, now - wait.deliveredAt);
     }
     return {
-      connections: this.connections.size,
+      connections: selected ? Number(this.connections.has(selected)) : this.connections.size,
       targets,
       queuedMessages,
       criticalQueuedMessages,
       pendingTransfers,
       oldestAckWaitMs,
-      ackTimeouts: this.ackTimeouts,
+      oldestQueueWaitMs,
+      ackTimeouts: selected ? this.states.get(selected)?.ackTimeouts ?? 0 : this.ackTimeouts,
     };
   }
 

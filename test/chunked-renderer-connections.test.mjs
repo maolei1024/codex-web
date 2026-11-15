@@ -91,6 +91,19 @@ function setup(t) {
   return { hub, parent, sender, client, ack, complete, advanceTo };
 }
 
+test("native queue evidence correlates enqueue, dequeue, chunks and ACK without changing delivery", (t) => {
+  const env = setup(t), peer = env.client(), other = env.client(), events = [];
+  env.hub.configure({ diagnostic: (connection, details, message) => events.push({ connection, details, requestId: message?.payload?.requestId ?? message?.payload?.message?.id }) });
+  const reply = { ...large, requestId: "test-response" };
+  env.sender.send(peer.connection.sender, channel, reply);
+  env.complete(peer);
+  assert.deepEqual(peer.messages, [reply]);
+  assert.equal(other.messages.length, 0);
+  assert.ok(events.every((e) => e.connection === peer.connection));
+  for (const phase of ["enqueue", "dequeue", "chunk", "ack"]) assert.ok(events.some((e) => e.details.phase === phase && e.requestId === "test-response"), phase);
+  assert.equal(env.hub.diagnostics(peer.connection).connections, 1);
+});
+
 for (const kind of ["start", "chunk", "end"]) {
   test(`disconnect during native ${kind} releases queue and old ACK cannot reach a replacement`, (t) => {
     const env = setup(t),

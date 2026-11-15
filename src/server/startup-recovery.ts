@@ -116,13 +116,14 @@ export function registerView(
   };
 }
 const events: {
+  at: number;
   method: string;
   phase: string;
   elapsedMs: number;
   reason: string;
 }[] = [];
 function trace(method: string, phase: string, start = Date.now(), reason = "") {
-  events.push({ method, phase, elapsedMs: Date.now() - start, reason });
+  events.push({ at: Date.now(), method, phase, elapsedMs: Date.now() - start, reason });
   if (events.length > 200) events.shift();
 }
 

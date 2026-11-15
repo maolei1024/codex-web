@@ -202,13 +202,35 @@ attempts, phases and socket retirement reasons, without repeated unchanged state
 
 Choose **Export diagnostics** above the settings/profile button at the bottom of
 the navigation rail, or in the recovery notice, to download a local JSON report,
-including while offline. It contains
-the build, coarse browser/network state, recovery budgets, bounded recent connection
-events and request counters. A recent authenticated server snapshot, when available,
-includes its capture time and age; collecting it is time- and size-limited and never
-blocks the download. The report excludes conversation content, drafts, credentials,
-URLs, project paths and host/thread identifiers. Events stay in memory for the life
-of the page (up to 200); export before refreshing if a connection fails.
+including while offline. Schema version 2 preserves the original top-level fields
+and adds independent startup/recovery milestones, pending readiness calls, submission
+operations, errors and browser performance evidence. Foreground online, background
+and offline intervals are exclusive; cache/live content presentation is distinguished.
+Request, host and thread identifiers are anonymous within the report. Explicit
+operation context links configuration and native writes; unrelated background calls
+are never attributed by timing. A socket write or IPC acknowledgement means the
+submission outcome is still unknown until a business response arrives.
+
+The tab retains 1,000 request events, 200 lifecycle events, 200 errors and 50 submission
+summaries, with separate milestone and performance summaries. Sanitized sessionStorage
+preserves 30 minutes across refresh, separated by page instance, within 1 MiB. Export
+is capped at 2 MiB; truncation/drop counts, unsupported capabilities and storage errors
+are reported. Account identity changes clear previous evidence. No content, draft,
+file contents, credentials, parameters, raw paths or full URLs are recorded. Only
+allowlisted static error messages/codes survive; unknown text becomes a fingerprint.
+Evidence is never automatically uploaded.
+
+The existing authenticated server endpoint accepts an optional `clientId`. Selected
+connection processing/queue/chunk/ACK evidence is bounded to 500 events per connection,
+16 connections and five minutes in process memory. Global counters remain separate.
+Client/server durations use their own monotonic clocks; timestamps are not subtracted
+across machines. A snapshot is requested on connection open, after three seconds of
+ongoing work, at most every ten seconds while still waiting, and on errors (coalesced
+with a five-second minimum interval). Idle pages do not poll. Export downloads
+immediately with the last snapshot's trigger, capture time, age and collection status.
+Heartbeat responsiveness plus business timeouts is evidence, not a root-cause verdict.
+HTTP response-header completion and resource transfer timings are separate; zero byte
+counts do not prove a zero-cost cache hit. Missing browser timing APIs stay explicit.
 
 Tests exercise the pinned extracted RPC transports and request client, including
 timeouts, late replies, subscription restoration and concurrent tabs. The image smoke

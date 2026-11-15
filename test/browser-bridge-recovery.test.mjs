@@ -22,6 +22,9 @@ const modules = Object.fromEntries(
       "app-host-recovery",
       "crypto-compat",
       "connection-diagnostics",
+      "diagnostic-journal",
+      "diagnostic-runtime",
+      "diagnostic-browser",
       "transport-recovery-window",
     ].map(async (name) => [
       `./${name}`,

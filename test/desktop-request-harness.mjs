@@ -6,6 +6,7 @@ export async function nativeRequestClient(
   dispatch,
   lifecycle = () => {},
   appHost = { nativeRequest: (_method, operation) => operation() },
+  diagnosticRuntime,
 ) {
   const source = await readFile(
     "scratch/asar/webview/assets/app-shared-8340f229c2b3.js",
@@ -39,7 +40,7 @@ export async function nativeRequestClient(
     window: {
       setTimeout,
       clearTimeout,
-      __ELECTRON_SHIM__: { appServerRequestLifecycle: lifecycle, appHost },
+      __ELECTRON_SHIM__: { appServerRequestLifecycle: lifecycle, appHost, diagnosticRuntime },
     },
     Date,
     DOMException,

@@ -1,0 +1,295 @@
+--- a/webview/assets/app-primary-2a670e99a60c.js
++++ b/webview/assets/app-primary-2a670e99a60c.js
+@@ -74518,6 +74518,9 @@
+   submitButtonMode: ue,
+   submitTarget: de,
+ }) {
++  const diagnostic = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime;
++  const diagnosticId = diagnostic?.id(W);
++  diagnostic?.step(diagnosticId, "attachments");
+   try {
+     var fe = jg();
+     let r = performance.timeOrigin + performance.now(),
+@@ -74812,6 +74815,8 @@
+           Out(e, ot, { submissionId: ct, failed: !0 });
+       };
+     at ??= void 0;
++    diagnostic?.bindMessage(at, diagnosticId);
++    diagnostic?.bindMessage(ct, diagnosticId);
+     let dt;
+     try {
+       let n =
+@@ -74976,6 +74981,9 @@
+                 x == null ? void 0 : (x.multiUserMessageSender ?? null),
+             }
+           : void 0;
++    diagnostic?.bindMessage(mt?.id, diagnosticId);
++    diagnostic?.tag(dt, diagnosticId);
++    diagnostic?.step(diagnosticId, "session");
+     mt?.id;
+     let ht = !1,
+       gt = !1,
+@@ -75362,7 +75370,9 @@
+       QY());
+   }))();
+ }
+-async function Rut(e, t, n) {
++async function Rut(e, t, n, diagnosticId) {
++  const diagnostic = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime;
++  diagnostic?.step(diagnosticId, "configuration");
+   let r = { hostId: t, cwd: n },
+     i = [];
+   (e.query.getData(lh, { ...r, failClosed: !0 }) ??
+@@ -75371,7 +75381,7 @@
+         .sendRequest(
+           `config/read`,
+           { includeLayers: !0, cwd: n },
+-          { priority: `critical` },
++          { priority: `critical`, [Symbol.for("codex-web.diagnostic.operation")]: diagnosticId },
+         )
+         .then((t) => {
+           (e.query.setData(lh, { ...r, failClosed: !0 }, t),
+@@ -75380,13 +75390,13 @@
+     ),
+     e.query.getData(mp, { hostId: t }) ??
+       i.push(
+-        ure(e, t, { priority: `critical` }).then((n) => {
++        ure(e, t, { priority: `critical`, [Symbol.for("codex-web.diagnostic.operation")]: diagnosticId }).then((n) => {
+           e.query.setData(mp, { hostId: t }, n);
+         }),
+       ),
+     e.query.getData(eCe, r) ??
+       i.push(
+-        Ahe(e, t, n, { priority: `critical` }).then((t) => {
++        Ahe(e, t, n, { priority: `critical`, [Symbol.for("codex-web.diagnostic.operation")]: diagnosticId }).then((t) => {
+           e.query.setData(eCe, r, t);
+         }),
+       ),
+@@ -75465,7 +75475,7 @@
+           d.current.delete(e);
+         };
+         const pendingSubmit = l.current;
+-        i().then(t, () => {
++        i(pendingSubmit?.submit?.options ?? pendingSubmit?.submit?.message).then(t, () => {
+           t();
+           if (l.current === pendingSubmit) { l.current = null; c.set(Zy, false); }
+         });
+@@ -75539,7 +75549,8 @@
+             ((l.current = null), c.set(Zy, !1)),
+           l.current == null
+             ? n
+-              ? ((l.current = { submit: e, submitTargetKey: a }),
++              ? ((globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.start(e.options ?? e.message, e.type === "direct-comment" ? "direct-comment" : "ordinary")),
++                (l.current = { submit: e, submitTargetKey: a }),
+                 c.set(Zy, !0),
+                 g(),
+                 !0)
+@@ -75593,7 +75604,7 @@
+     : (f = t[2]);
+   let p;
+   t[3] !== i || t[4] !== a || t[5] !== l
+-    ? ((p = () => Rut(l, a, i).catch(error => { Jut(error); l.get(ll).danger(error?.message ?? String(error)); throw error; })),
++    ? ((p = diagnosticOptions => { const diagnostic = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime; const id = diagnostic?.id(diagnosticOptions); return Rut(l, a, i, id).catch(error => { diagnostic?.fail(id, error, "configuration"); Jut(error); l.get(ll).danger(error?.message ?? String(error), diagnostic?.tag({}, id)); throw error; }); }),
+       (t[3] = i),
+       (t[4] = a),
+       (t[5] = l),
+@@ -75710,6 +75721,8 @@
+       [s, f, p],
+     ));
+   let h = rp(async (r = {}) => {
++      const diagnostic = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime;
++      const diagnosticId = diagnostic?.start(r, r.followUpSubmitAction === "queue" ? "follow-up" : r.followUpSubmitAction === "steer" ? "steer" : "ordinary");
+       let i =
+         o.type === `cloud`
+           ? null
+@@ -75723,18 +75736,17 @@
+         a.submitBlockReason === `loading-cloud-environment` ||
+         i === `loading-cloud-environment` ||
+         s.get(TE)
+-      )
+-        return;
++      ) { diagnostic?.step(diagnosticId, "blocked", { outcome: "not-sent", reason: "validation", locked: !!s.get(TE) }); return; }
+       let u = r;
+       if (
+         u.workHomePolicyAcceptance == null &&
+         e.captureSubmissionWorkHomePolicyAcceptance != null
+       ) {
+         let t = e.captureSubmissionWorkHomePolicyAcceptance();
+-        if (t == null) return;
++        if (t == null) { diagnostic?.step(diagnosticId, "blocked", { outcome: "not-sent", reason: "permission" }); return; }
+         u = { ...u, workHomePolicyAcceptance: t };
+       }
+-      if (!bw(s, u.workHomePolicyAcceptance)) return;
++      if (!bw(s, u.workHomePolicyAcceptance)) { diagnostic?.step(diagnosticId, "blocked", { outcome: "not-sent", reason: "permission" }); return; }
+       let h =
+           s.value.kind === `new` ||
+           (s.value.kind === `local` && s.value.placement === `main`),
+@@ -75798,6 +75810,7 @@
+         u.onDeferred?.();
+         return;
+       }
++      diagnostic?.step(diagnosticId, "preparing", { locked: true });
+       s.set(TE, !0);
+       let v = m.current,
+         x = s.get(wm),
+@@ -75812,6 +75825,7 @@
+       let D = E?.isAttached === !0 ? E : null,
+         O = () => void 0,
+         k = (0, Qut.default)(() => {
++          diagnostic?.step(diagnosticId, "unlocked", { locked: false });
+           (s.set(TE, !1), s.set(kwe, !1), O());
+         }),
+         A = async (r) => {
+@@ -75901,6 +75915,7 @@
+             editingQueuedMessagePosition: e.editingQueuedMessagePosition,
+             handleSideChatOpenError: e.handleSideChatOpenError,
+             handleSubmitError: (t) => {
++              diagnostic?.fail(diagnosticId, t);
+               e.handleSubmitError(
+                 t,
+                 !a.submitBlockContext.isThreadHistoryLoading || c == null
+@@ -76006,6 +76021,7 @@
+             setIsSubmitting: e.setIsSubmitting,
+             shouldRestrictRemoteHostImageSize: !1,
+             onBlockedSubmit: (t) => {
++              diagnostic?.step(diagnosticId, "blocked", { outcome: "not-sent", reason: t });
+               if (t === `missing-workspace` && i === t) {
+                 s.set(dhe, !0);
+                 return;
+@@ -76022,6 +76038,7 @@
+               e.setIsSubmitBlockedDialogOpen(!0);
+             },
+             showEmptySubmitTooltip: () => {
++              diagnostic?.step(diagnosticId, "blocked", { outcome: "not-sent", reason: "validation" });
+               e.setEmptySubmitTooltipNonce((e) => e + 1);
+             },
+             submitBlockReason: s.get(zCe) ?? i ?? a.submitBlockReason,
+@@ -76033,7 +76050,7 @@
+         u.aeonInitialization || u.serverInitialization != null
+           ? A([])
+           : eTe(s).submit(A)
+-      ).catch(error => e.handleSubmitError(error)).finally(() => {
++      ).catch(error => { diagnostic?.fail(diagnosticId, error); return e.handleSubmitError(error); }).finally(() => {
+         (w(),
+           T ||
+             (v?.restoreDraft(!v.retained),
+--- a/webview/assets/app-shared-8340f229c2b3.js
++++ b/webview/assets/app-shared-8340f229c2b3.js
+@@ -14304,6 +14304,7 @@
+           ire.postMessage({ ...t, type: e });
+         }
+         deliverMessage(e, t) {
++          if (e === `mcp-response`) globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.backendReply(t.hostId, t.message);
+           let n = this.handlers.get(e);
+           if (!n) return;
+           let r = (e, t) => {
+@@ -121570,9 +121571,11 @@
+       return l(e, t, `warning`);
+     },
+     danger(e, t) {
++      globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.toast(e, t);
+       return l(e, t, `danger`);
+     },
+     custom(e) {
++      if (e.level === "danger") globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.toast(e.errorAnalytics?.error);
+       return l(null, e, e.level ?? `info`);
+     },
+     closeAll() {
+@@ -131468,7 +131471,7 @@
+           return this.#f != null;
+         }
+         identityKey = () => this.#o;
+-        historyCacheIdentity = () => this.#t?.identity?.historyCacheIdentity ?? null;
++        historyCacheIdentity = () => { const value = this.#t?.identity?.historyCacheIdentity ?? null; globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.identity(value); return value; };
+         isReady = () => this.#e == null || this.#n != null;
+         executionHostKey(e) {
+           return this.#c?.[e];
+@@ -131657,6 +131660,7 @@
+               executionHostKeysByHostId: i.executionHostKeysByHostId,
+             }),
+               (this.#t = r),
++              globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.identity(i.identity?.historyCacheIdentity),
+               this.#a != null && !dyt(this.#a, i.identity) && this.#v(),
+               (this.#a = i.identity),
+               (this.#c = i.executionHostKeysByHostId),
+@@ -131678,7 +131682,7 @@
+           if (this.#t !== e) return;
+           if (t.type === `retired`) {
+             ((this.#t = void 0),
+-              t.reason === `identity` && (this.#v(), this.#x()),
++              t.reason === `identity` && (globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.retireIdentity(), this.#v(), this.#x()),
+               e.dispose(),
+               (this.#u = this.#l != null),
+               this.#y(),
+@@ -155490,6 +155494,7 @@
+         : null,
+     c = { notification: o, automationCapability: s, receivedAtMs: i },
+     { manager: l, notificationContext: u } = e;
++  globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.notification(l.getHostId(), o.method, o.params);
+   if (
+     ((o.method === `account/updated` ||
+       o.method === `account/login/completed`) &&
+@@ -174461,7 +174466,7 @@
+         }
+         async sendRequest(e, t, n) {
+           return window.__ELECTRON_SHIM__.appHost.nativeRequest(e,
+-            timeoutMs => this.sendRequestOnce(e, t, timeoutMs == null ? n : { ...n, priority: "critical", timeoutMs: Math.min(n?.timeoutMs > 0 ? n.timeoutMs : Infinity, timeoutMs) }), this.hostId, t, n?.codexWebOptionalRead === true);
++            timeoutMs => this.sendRequestOnce(e, t, timeoutMs == null ? n : { ...n, priority: "critical", timeoutMs: Math.min(n?.timeoutMs > 0 ? n.timeoutMs : Infinity, timeoutMs) }), this.hostId, t, n?.codexWebOptionalRead === true, globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.id(n));
+         }
+         async sendRequestOnce(e, t, n) {
+           if (this.dispatchMessage == null)
+@@ -174680,6 +174685,7 @@
+               (this.requestPromises.set(i, c),
+                 r != null && this.pendingConfigReadRequests.set(r, c));
+             });
++          globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.registerNative(this.hostId, i, e, t, n);
+           return (
+             zf.debug(`mcp_request_enqueued`, {
+               safe: {
+@@ -182847,6 +182853,7 @@
+             }));
+         }
+         onFetchResponse(e) {
++          globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.fetchEnd(e.requestId, e.responseType === "error" ? e.error : (e.status >= 400 ? new Error("HTTP " + e.status) : undefined), e.status);
+           let t = this.pendingRequests.get(e.requestId);
+           if (t)
+             switch (
+@@ -183247,8 +183254,10 @@
+               body: n?.body,
+               responsePriority: n?.responsePriority,
+             };
++          globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.fetchStart(r, t, n);
+           return new Promise((e, t) => {
+             let a = () => {
++              globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.fetchEnd(r, n?.signal?.reason ?? new DOMException("Aborted", "AbortError"));
+               (this.pendingRequests.delete(r),
+                 n?.signal?.removeEventListener(`abort`, a),
+                 Vf.getInstance().dispatchMessage(`cancel-fetch`, {
+@@ -183277,6 +183286,7 @@
+               (n?.assertRequestCurrent?.(),
+                 Vf.getInstance().dispatchMessage(`fetch`, i));
+             } catch (e) {
++              globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.fetchEnd(r, e);
+               throw (
+                 this.pendingRequests.delete(r),
+                 n?.signal?.removeEventListener(`abort`, a),
+--- a/webview/assets/app-initial-1ab6fbe93c4f.js
++++ b/webview/assets/app-initial-1ab6fbe93c4f.js
+@@ -560994,6 +560994,7 @@
+         );
+       },
+     });
++  globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.editor(V.dom);
+   if (!y.enableInlineSystemHints) {
+     let e = eHr(V.state);
+     e != null && V.updateState(V.state.apply(e.setMeta(`addToHistory`, !1)));
+--- a/webview/assets/local-conversation-thread-269c4ee9ddf0.js
++++ b/webview/assets/local-conversation-thread-269c4ee9ddf0.js
+@@ -19448,6 +19448,7 @@
+     [],
+   );
+   let An = Si(() => {
++      globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.content(be === "cached" ? "cache" : "live", i, t);
+       Pt(!0);
+       let { clientThreadId: e } = w.value,
+         t = !Re && (Ae || ye) ? w.get(Kh, e) : null;

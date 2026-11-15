@@ -1,0 +1,19 @@
+--- a/.vite/build/main-CwxgTOle.js
++++ b/.vite/build/main-CwxgTOle.js
+@@ -35833,6 +35833,7 @@
+       return e.startsWith(sle);
+     }
+     async handleVsCodeFetchRequest(e, t, n) {
++      globalThis.__CODEX_WEB_RENDERERS__.requestDiagnostic?.(e, t, "begin");
+       let i = t.url.slice(15);
+       try {
+         let a = await this.fetchHandler.handleVSCodeRequest(
+@@ -35867,6 +35868,8 @@
+         t.responsePriority === `critical`
+           ? this.options.chunkedMessageSender.sendCritical(e, g.bt, i)
+           : this.options.chunkedMessageSender.sendInlineMessageForView(e, i);
++      } finally {
++        globalThis.__CODEX_WEB_RENDERERS__.requestDiagnostic?.(e, t, "end");
+       }
+     }
+     async handleDictationStreamConnectInfoRequest(e, t) {

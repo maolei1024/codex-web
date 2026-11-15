@@ -30,6 +30,7 @@ import { installDownloadHooks } from "./downloads";
 import { installFeatureConfigRoute } from "./feature-config";
 import { SharedObjectHttp } from "./shared-object-http";
 import { BinaryReadHttp } from "./binary-read-http";
+import { ServerDiagnosticRecorder } from "./diagnostic-recorder";
 import { getRendererParent } from "./electron/index";
 import {
   rendererConnections,
@@ -623,6 +624,7 @@ export async function startIpcBridgeServer(
   const sharedObjectHttp = new SharedObjectHttp();
   const binaryReadHttp = new BinaryReadHttp();
   const httpClients = new Map<WebSocket, string>();
+  const diagnosticRecorder = new ServerDiagnosticRecorder();
   const rendererClients = new Map<string, RendererConnection>();
   const rendererSockets = new WeakMap<RendererConnection, WebSocket>();
   const socketRenderers = new Map<WebSocket, RendererConnection>();
@@ -753,8 +755,12 @@ export async function startIpcBridgeServer(
   app.get("/", async (_request, reply) => {
     return reply.sendFile("index.html");
   });
-  app.get("/__backend/diagnostics", async (_request, reply) => {
+  app.get<{ Querystring: { clientId?: string } }>("/__backend/diagnostics", async (request, reply) => {
     reply.header("Cache-Control", "no-store");
+    const clientId = typeof request.query.clientId === "string" && /^[0-9a-f-]{36}$/.test(request.query.clientId) ? request.query.clientId : undefined;
+    const selected = clientId ? rendererClients.get(clientId) : undefined;
+    const evidence = diagnosticRecorder.snapshot(clientId);
+    if (selected) Object.assign(evidence.connection, rendererConnections.diagnostics(selected));
     return {
       buildId: assetVersion,
       connections: sockets.size,
@@ -768,6 +774,7 @@ export async function startIpcBridgeServer(
       ),
       chunkedIpc: rendererConnections.diagnostics(),
       startup: startupRecovery.diagnostics(),
+      evidence,
     };
   });
   app.get("/__backend/version", async (_request, reply) => {
@@ -882,7 +889,22 @@ export async function startIpcBridgeServer(
     }
     return message;
   };
-  rendererConnections.configure({ prepareGlobal, prepareConnection });
+  rendererConnections.configure({ prepareGlobal, prepareConnection,
+    diagnostic: (connection, details, message) => {
+      const peer = rendererSockets.get(connection), clientId = peer ? httpClients.get(peer) : undefined;
+      if (!clientId) return;
+      const event = message?.payload as any;
+      if (message?.channel === "diagnostic") {
+        diagnosticRecorder.request(clientId, event, String(details.phase));
+        return;
+      }
+      const requestId = event?.requestId ?? event?.message?.id ?? event?.id;
+      diagnosticRecorder.record(clientId, { ...details, layer: "ipc", requestId: requestId == null ? undefined : diagnosticRecorder.alias(requestId, clientId),
+        parentId: details.transferId == null ? undefined : diagnosticRecorder.alias(details.transferId, clientId) });
+      if (details.phase === "enqueue" && requestId != null)
+        diagnosticRecorder.request(clientId, event, "reply");
+    },
+  });
   const deliverScoped = (
     connection: RendererConnection,
     channel: string,
@@ -898,7 +920,12 @@ export async function startIpcBridgeServer(
       const message = prepareGlobal({ channel, payload: args[0] }, connection);
       if (!message || !prepareConnection(connection, message)) return;
     }
-    socket.send(JSON.stringify({ type: "ipc-main-event", channel, args }));
+    const encoded = JSON.stringify({ type: "ipc-main-event", channel, args });
+    socket.send(encoded);
+    const clientId = httpClients.get(socket), event = args[0] as any;
+    if (clientId) diagnosticRecorder.record(clientId, { phase: "transport", layer: "ipc", encodedBytes: Buffer.byteLength(encoded), sequence: event?.sequence,
+      requestId: event?.requestId == null && event?.message?.id == null ? undefined : diagnosticRecorder.alias(event.requestId ?? event.message.id, clientId),
+      parentId: event?.transferId == null ? undefined : diagnosticRecorder.alias(event.transferId, clientId) });
   };
   bridgeState.broadcastToRenderer = (message: MainToRendererMessage): void => {
     if (message.type !== "ipc-main-event") return;
@@ -955,6 +982,7 @@ export async function startIpcBridgeServer(
       },
       beforeClose: () => {
         const clientId = httpClients.get(socket);
+        if (clientId) diagnosticRecorder.close(clientId);
         if (clientId) binaryReadHttp.disconnect(clientId);
         if (clientId) sharedObjectHttp.disconnect(clientId);
         if (clientId) rendererClients.delete(clientId);
@@ -969,6 +997,7 @@ export async function startIpcBridgeServer(
     rendererSockets.set(connection, socket);
     const clientId = httpClients.get(socket);
     if (clientId) {
+      diagnosticRecorder.open(clientId);
       rendererClients.set(clientId, connection);
       if (parameters.get("binaryReadHttp") === "1")
         binaryReadHttp.connect(clientId, connection);
@@ -1034,6 +1063,7 @@ export async function startIpcBridgeServer(
           return;
         }
         sanitizeOutboundMcpRequestArgs(message.args);
+        if (clientId) diagnosticRecorder.request(clientId, message.args[0], "received");
         bridgeState.handleRendererSend?.(
           message.channel,
           message.args,
@@ -1119,6 +1149,7 @@ export async function startIpcBridgeServer(
           return;
         }
         const { channel, requestId, args } = message;
+        if (clientId) diagnosticRecorder.request(clientId, args[0], "received", requestId);
         sanitizeOutboundMcpRequestArgs(args);
         const event =
           channel === viewMessageChannel
@@ -1152,6 +1183,7 @@ export async function startIpcBridgeServer(
                 )),
         )
           .then((result) => {
+            if (clientId) diagnosticRecorder.record(clientId, { requestId: diagnosticRecorder.alias(requestId, clientId), phase: "acknowledged", layer: "ipc" });
             const payload: MainToRendererMessage = {
               type: "ipc-renderer-invoke-result",
               requestId,
@@ -1163,6 +1195,7 @@ export async function startIpcBridgeServer(
             }
           })
           .catch((error) => {
+            if (clientId) diagnosticRecorder.request(clientId, args[0], "error", requestId, error);
             const payload: MainToRendererMessage = {
               type: "ipc-renderer-invoke-result",
               requestId,
@@ -1191,6 +1224,7 @@ export async function startIpcBridgeServer(
   pingInterval.unref();
 
   app.addHook("onClose", async () => {
+    diagnosticRecorder.dispose();
     clearInterval(pingInterval);
     for (const socket of sockets) {
       socketRenderers.get(socket)?.close();

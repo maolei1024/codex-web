@@ -1,3 +1,4 @@
+import { sanitizeDiagnosticRecord } from "../server/diagnostic-records";
 /** Local, bounded transport evidence. Never collect message bodies or arbitrary strings. */
 type RecordValue = Record<string, unknown>;
 export type DiagnosticInput = {
@@ -397,9 +398,23 @@ function serverDiagnostics(value: unknown): RecordValue {
       "criticalQueuedMessages",
       "pendingTransfers",
       "oldestAckWaitMs",
+      "oldestQueueWaitMs",
       "ackTimeouts",
     ]),
     startup: traces(source.startup),
+    evidence: sanitizeServerEvidence(source.evidence),
+  };
+}
+function sanitizeServerEvidence(value: unknown) {
+  const source = record(value);
+  return {
+    ...numbers(source, ["capturedAt", "retentionMs", "dropped", "limit", "firstAt", "lastAt"]),
+    selected: source.selected === true,
+    truncated: source.truncated === true,
+    status: ["available", "missing"].includes(String(source.status)) ? source.status : "missing",
+    process: sanitizeDiagnosticRecord(source.process),
+    connection: sanitizeDiagnosticRecord(source.connection),
+    events: Array.isArray(source.events) ? source.events.slice(-500).map(sanitizeDiagnosticRecord) : [],
   };
 }
 async function readBoundedJson(
@@ -437,7 +452,7 @@ async function readBoundedJson(
 }
 
 export function createConnectionDiagnostics(
-  options: { now?: () => number; maxEvents?: number } = {},
+  options: { now?: () => number; maxEvents?: number; evidence?: () => unknown; onRecord?: (type: string, details: RecordValue) => void } = {},
 ) {
   const now = options.now ?? Date.now;
   const limit = Math.max(
@@ -449,6 +464,7 @@ export function createConnectionDiagnostics(
     generation = 0;
   let serverStatus: ServerStatus = "not-requested";
   let server: { capturedAt: number; diagnostics: RecordValue } | undefined;
+  let trigger = "other";
   function snapshot(input: DiagnosticInput = {}) {
     const source = record(input.connection);
     const connection = {
@@ -468,7 +484,7 @@ export function createConnectionDiagnostics(
       "authenticationFailed",
     ]);
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       capturedAt: now(),
       buildId: buildId(input.buildId),
       browser: browserState(input.browser),
@@ -476,12 +492,15 @@ export function createConnectionDiagnostics(
       diagnostics: localDiagnostics(input.diagnostics),
       droppedEvents,
       events: events.map((event) => ({ ...event })),
+      evidence: options.evidence?.(),
       server: {
         status: serverStatus,
+        trigger,
         ...(server
           ? {
               capturedAt: server.capturedAt,
               ageMs: Math.max(0, now() - server.capturedAt),
+              stale: now() - server.capturedAt > 10_000,
               diagnostics: structuredClone(server.diagnostics),
             }
           : {}),
@@ -492,6 +511,7 @@ export function createConnectionDiagnostics(
     record(type: string, details?: unknown) {
       if (!EVENT_TYPES.has(type)) return;
       events.push({ at: now(), type, ...eventDetails(details) });
+      try { options.onRecord?.(type, eventDetails(details)); } catch {}
       if (events.length > limit) {
         events.shift();
         droppedEvents++;
@@ -499,7 +519,22 @@ export function createConnectionDiagnostics(
     },
     snapshot,
     serialize(input: DiagnosticInput = {}) {
-      return JSON.stringify(snapshot(input), null, 2);
+      const report = snapshot(input);
+      let text = JSON.stringify(report, null, 2);
+      // Evidence has its own bounded rings; trim detail before dropping failures.
+      const evidence = report.evidence as any;
+      const limits = { limitBytes: 2 * 1024 * 1024, truncated: false };
+      while (new TextEncoder().encode(text).length > limits.limitBytes && evidence) {
+        limits.truncated = true;
+        if (evidence.previousPages?.length) evidence.previousPages.shift();
+        else {
+          const bucket = [evidence.requests, evidence.performance, evidence.lifecycle, evidence.operationSteps, evidence.errors].find((b) => b?.events?.length);
+          if (!bucket) break;
+          const n = Math.max(1, Math.ceil(bucket.events.length / 4)); bucket.events.splice(0, n); bucket.dropped += n; bucket.truncated = true;
+        }
+        text = JSON.stringify({ ...report, exportLimits: limits }, null, 2);
+      }
+      return JSON.stringify({ ...report, exportLimits: limits }, null, 2);
     },
     clearServerSnapshot() {
       generation++;
@@ -512,6 +547,8 @@ export function createConnectionDiagnostics(
         fetch?: typeof fetch;
         online?: boolean;
         timeoutMs?: number;
+        clientId?: string;
+        trigger?: string;
       } = {},
     ) {
       const local = snapshot(input),
@@ -522,12 +559,14 @@ export function createConnectionDiagnostics(
         return { ...local, server: snapshot().server };
       }
       serverStatus = "fetching";
+      trigger = ["open", "startup", "slow", "failure", "ready", "recovery"].includes(options.trigger ?? "") ? options.trigger! : "other";
       const controller = new AbortController();
       let active = true,
         timer: ReturnType<typeof setTimeout> | undefined;
       const work = (async () => {
         try {
-          const response = await fetcher("/__backend/diagnostics", {
+          const client = typeof options.clientId === "string" && /^[a-f0-9-]{16,64}$/.test(options.clientId) ? `?clientId=${options.clientId}` : "";
+          const response = await fetcher(`/__backend/diagnostics${client}`, {
             credentials: "same-origin",
             cache: "no-store",
             redirect: "error",

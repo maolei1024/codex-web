@@ -97,6 +97,7 @@ export function createThreadCache(
     tab?: string;
     channel?: Pick<BroadcastChannel, "postMessage" | "addEventListener"> | null;
     onSync?: (count: number) => void;
+    onProjection?: (hostId: string, threadId: string, source: string) => void;
     now?: () => number;
   } = {},
 ) {
@@ -268,6 +269,7 @@ export function createThreadCache(
       function projected(id: string) {
         const live = originalConversation(id),
           view = views.get(id);
+        options.onProjection?.(manager.getHostId(), id, "live");
         if (!view?.cached || identity() !== scope) return live;
         const display = live ?? native.placeholder?.(id, view.metadata);
         if (!display) return live;
@@ -297,6 +299,7 @@ export function createThreadCache(
           shown = [...shown.slice(0, boundary), ...turns];
         }
         view.usedProjection = true;
+        options.onProjection?.(manager.getHostId(), id, "cache");
         return {
           ...display,
           turns: shown,
