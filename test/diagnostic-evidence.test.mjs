@@ -457,6 +457,14 @@ test("refresh floods preserve previous submission results and startup while appl
   );
 });
 
+test("a completed local queue action without a business reply is unknown and does not poll while idle", (t) => {
+  const { journal, advance } = fixture(t);
+  const id = journal.startOperation("follow-up");
+  journal.step(id, "queued"); journal.step(id, "unlocked", { locked: false }); advance(4000);
+  assert.equal(journal.snapshot().operations[0].outcome, "outcome-unknown");
+  assert.equal(journal.hasSlowActivity(), false);
+});
+
 test("selected server records survive healthy idle periods and detailed snapshots stay bounded", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 1000 });
   const server = new ServerDiagnosticRecorder();

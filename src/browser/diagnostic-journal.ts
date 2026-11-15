@@ -266,6 +266,12 @@ export class DiagnosticJournal {
   ) {
     if (!id || !this.operations.has(id)) return;
     const operation = this.operations.get(id)!;
+    // Some native UI actions finish locally (queued drafts, confirmations, cloud
+    // routes). Without a causal business reply their outcome is unknown; an
+    // unlocked, untracked action must not keep the slow-work sampler polling.
+    if (phase === "unlocked" && operation.outcome === "pending" &&
+      ![...this.pending.values()].some((request) => request.operationId === id))
+      details = { ...details, outcome: "outcome-unknown" };
     if (
       ["accepted", "queued", "rejected-backend"].includes(
         String(operation.outcome),
