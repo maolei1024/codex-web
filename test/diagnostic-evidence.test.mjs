@@ -264,6 +264,67 @@ test("persisted evidence is re-sanitized, expires at thirty minutes and clears o
   assert.equal(second.journal.snapshot().errors.events.length, 0);
 });
 
+test("refresh never extends event retention and recent outcomes keep their completion time", (t) => {
+  const storage = memoryStorage();
+  let now = 1000;
+  const first = new DiagnosticJournal({
+    storage,
+    now: () => now,
+    mono: () => now,
+  });
+  first.milestone("startup", "ready");
+  const old = first.startOperation();
+  first.step(old, "accepted", { outcome: "accepted" });
+  const recent = first.startOperation();
+  for (const bucket of ["requests", "lifecycle", "errors", "performance"])
+    first.record(bucket, { method: "get-global-state", phase: "end" });
+  now += 29 * 60_000;
+  first.step(recent, "accepted", { outcome: "accepted" });
+  first.record("requests", { method: "config/read", phase: "end" });
+  first.dispose();
+  const second = new DiagnosticJournal({
+    storage,
+    now: () => now,
+    mono: () => now,
+  });
+  t.after(() => second.dispose());
+  assert.equal(second.snapshot().previousPages[0].requests.events.length, 2);
+  now += 2 * 60_000;
+  const page = second.snapshot().previousPages[0];
+  assert.deepEqual(
+    page.requests.events.map((e) => e.method),
+    ["config/read"],
+  );
+  assert.equal(page.requests.dropped, 1);
+  assert.equal(page.requests.firstAt, page.requests.events[0].at);
+  for (const bucket of ["lifecycle", "errors", "performance"])
+    assert.equal(page[bucket].events.length, 0);
+  assert.deepEqual(
+    page.operations.map((o) => o.id),
+    [recent],
+  );
+  assert.ok(page.operationSteps.events.every((e) => e.at >= now - 30 * 60_000));
+  assert.equal(
+    page.startup[0].method,
+    "startup",
+    "independent startup summary survives detail expiry",
+  );
+  second.flush();
+  const saved = JSON.parse(storage.getItem("codex-web-diagnostics-v2"));
+  assert.equal(saved.pages[0].requests.events.length, 1);
+  assert.equal(saved.pages[0].errors.events.length, 0);
+  const third = new DiagnosticJournal({
+    storage,
+    now: () => now,
+    mono: () => now,
+  });
+  t.after(() => third.dispose());
+  assert.deepEqual(
+    third.snapshot().previousPages[0].operations.map((o) => o.id),
+    [recent],
+  );
+});
+
 test("storage failure, floods and corrupted data never prevent export", (t) => {
   const { journal } = fixture(t, {
     getItem: () => null,
@@ -460,7 +521,9 @@ test("refresh floods preserve previous submission results and startup while appl
 test("a completed local queue action without a business reply is unknown and does not poll while idle", (t) => {
   const { journal, advance } = fixture(t);
   const id = journal.startOperation("follow-up");
-  journal.step(id, "queued"); journal.step(id, "unlocked", { locked: false }); advance(4000);
+  journal.step(id, "queued");
+  journal.step(id, "unlocked", { locked: false });
+  advance(4000);
   assert.equal(journal.snapshot().operations[0].outcome, "outcome-unknown");
   assert.equal(journal.hasSlowActivity(), false);
 });

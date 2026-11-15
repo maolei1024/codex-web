@@ -269,8 +269,11 @@ export class DiagnosticJournal {
     // Some native UI actions finish locally (queued drafts, confirmations, cloud
     // routes). Without a causal business reply their outcome is unknown; an
     // unlocked, untracked action must not keep the slow-work sampler polling.
-    if (phase === "unlocked" && operation.outcome === "pending" &&
-      ![...this.pending.values()].some((request) => request.operationId === id))
+    if (
+      phase === "unlocked" &&
+      operation.outcome === "pending" &&
+      ![...this.pending.values()].some((request) => request.operationId === id)
+    )
       details = { ...details, outcome: "outcome-unknown" };
     if (
       ["accepted", "queued", "rejected-backend"].includes(
@@ -367,10 +370,52 @@ export class DiagnosticJournal {
       )
     );
   }
+  private expirePreviousPages() {
+    const cutoff = this.now() - TTL;
+    this.previousPages = this.previousPages.filter(
+      (page) => page.capturedAt >= cutoff,
+    );
+    for (const page of this.previousPages) {
+      for (const key of [
+        "requests",
+        "lifecycle",
+        "errors",
+        "performance",
+        "operationSteps",
+      ]) {
+        const bucket = page[key];
+        if (!Array.isArray(bucket?.events)) continue;
+        const kept = bucket.events.filter(
+          (event: DiagnosticRecord) =>
+            typeof event.at === "number" && event.at >= cutoff,
+        );
+        const removed = bucket.events.length - kept.length;
+        if (!removed) continue;
+        bucket.events = kept;
+        bucket.dropped = Number(bucket.dropped ?? 0) + removed;
+        bucket.truncated = true;
+        bucket.firstAt = kept[0]?.at ?? null;
+        bucket.lastAt = kept.at(-1)?.at ?? null;
+      }
+      const operations = page.operations ?? [];
+      page.operations = operations.filter(
+        (operation: DiagnosticRecord) =>
+          Number(operation.endAt ?? operation.at) >= cutoff,
+      );
+      const removed = operations.length - page.operations.length;
+      if (removed) {
+        const info = ((page.completeness ??= {}).operations ??= {});
+        info.dropped = Number(info.dropped ?? 0) + removed;
+        info.truncated = true;
+        info.firstAt = page.operations[0]?.at ?? null;
+        info.lastAt = page.operations.at(-1)?.at ?? null;
+      }
+    }
+  }
   private page() {
     const clock = this.clock();
     for (const [id, operation] of this.operations)
-      if (clock.at - Number(operation.at) > TTL) {
+      if (clock.at - Number(operation.endAt ?? operation.at) > TTL) {
         this.operations.delete(id);
         this.operationsDropped++;
       }
@@ -456,9 +501,7 @@ export class DiagnosticJournal {
     };
   }
   snapshot() {
-    this.previousPages = this.previousPages.filter(
-      (p) => this.now() - p.capturedAt <= TTL,
-    );
+    this.expirePreviousPages();
     const previousPages = structuredClone(this.previousPages),
       current = this.page();
     capDiagnosticPages([...previousPages, current]);
@@ -488,6 +531,7 @@ export class DiagnosticJournal {
     this.flushTimer = undefined;
     if (!this.storage) return;
     this.lastFlush = this.now();
+    this.expirePreviousPages();
     const pages = [
       ...structuredClone(
         this.previousPages.filter((p) => this.now() - p.capturedAt <= TTL),
@@ -622,6 +666,7 @@ export class DiagnosticJournal {
           }
           return out;
         });
+      this.expirePreviousPages();
       this.storageStatus = "restored";
     } catch {
       this.storageStatus = "corrupt";
