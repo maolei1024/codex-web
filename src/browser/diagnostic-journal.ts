@@ -1,5 +1,7 @@
 import {
   DIAGNOSTIC_METHODS,
+  capDiagnosticPages,
+  trimDiagnosticPages,
   DiagnosticRing,
   diagnosticAlias,
   diagnosticError,
@@ -451,9 +453,12 @@ export class DiagnosticJournal {
     this.previousPages = this.previousPages.filter(
       (p) => this.now() - p.capturedAt <= TTL,
     );
+    const previousPages = structuredClone(this.previousPages),
+      current = this.page();
+    capDiagnosticPages([...previousPages, current]);
     return {
-      ...this.page(),
-      previousPages: structuredClone(this.previousPages),
+      ...current,
+      previousPages,
       retentionMs: TTL,
       storage: {
         status: this.storageStatus,
@@ -478,38 +483,26 @@ export class DiagnosticJournal {
     if (!this.storage) return;
     this.lastFlush = this.now();
     const pages = [
-      ...this.previousPages.filter((p) => this.now() - p.capturedAt <= TTL),
+      ...structuredClone(
+        this.previousPages.filter((p) => this.now() - p.capturedAt <= TTL),
+      ),
       this.page(),
     ];
+    capDiagnosticPages(pages);
     let text = JSON.stringify({
       version: 2,
       savedAt: this.now(),
+      truncated: this.persistenceTruncated,
       identity: this.identity,
       pages,
     });
     while (new TextEncoder().encode(text).length > STORAGE_LIMIT) {
       this.persistenceTruncated = true;
-      if (pages.length > 1) pages.shift();
-      else {
-        const page = pages[0];
-        const bucket = [
-          page.requests,
-          page.performance,
-          page.lifecycle,
-          page.operationSteps,
-          page.errors,
-        ].find((b) => b.events.length);
-        if (!bucket) break;
-        const removed = bucket.events.splice(
-          0,
-          Math.max(1, Math.ceil(bucket.events.length / 4)),
-        );
-        bucket.dropped += removed.length;
-        bucket.truncated = true;
-      }
+      if (!trimDiagnosticPages(pages)) break;
       text = JSON.stringify({
         version: 2,
         savedAt: this.now(),
+        truncated: this.persistenceTruncated,
         identity: this.identity,
         pages,
       });
@@ -533,6 +526,7 @@ export class DiagnosticJournal {
       if (raw.length > STORAGE_LIMIT) throw new Error();
       const saved = JSON.parse(raw);
       if (saved.version !== 2 || !Array.isArray(saved.pages)) throw new Error();
+      this.persistenceTruncated = saved.truncated === true;
       this.identity = sanitizeDiagnosticRecord({ id: saved.identity }).id as
         | string
         | undefined;

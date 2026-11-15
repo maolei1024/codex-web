@@ -210,3 +210,95 @@ export class DiagnosticRing {
     this.dropped = 0;
   }
 }
+
+function dropEvents(bucket: any, count: number) {
+  if (!bucket?.events?.length || count <= 0) return;
+  bucket.events.splice(0, count);
+  bucket.dropped = Number(bucket.dropped ?? 0) + count;
+  bucket.truncated = true;
+  bucket.firstAt = bucket.events[0]?.at ?? null;
+  bucket.lastAt = bucket.events.at(-1)?.at ?? null;
+}
+
+/** Limits apply to the tab, including archived documents, not once per refresh. */
+export function capDiagnosticPages(pages: any[]) {
+  const limits = {
+    requests: 1000,
+    lifecycle: 200,
+    errors: 200,
+    performance: 200,
+    operationSteps: 1600,
+  };
+  let operations = 50;
+  for (const page of [...pages].reverse()) {
+    for (const [key, limit] of Object.entries(limits)) {
+      const bucket = page[key];
+      if (!Array.isArray(bucket?.events)) continue;
+      dropEvents(bucket, Math.max(0, bucket.events.length - limit));
+      limits[key as keyof typeof limits] -= bucket.events.length;
+    }
+    const removed = Math.max(0, (page.operations?.length ?? 0) - operations);
+    if (removed) {
+      page.operations.splice(0, removed);
+      const info = ((page.completeness ??= {}).operations ??= {});
+      info.dropped = Number(info.dropped ?? 0) + removed;
+      info.truncated = true;
+    }
+    operations -= page.operations?.length ?? 0;
+  }
+}
+
+/** Shed detail across documents before losing failures, outcomes or milestones. */
+export function trimDiagnosticPages(pages: any[]): boolean {
+  for (const key of [
+    "requests",
+    "performance",
+    "lifecycle",
+    "operationSteps",
+  ]) {
+    const bucket = pages.find((page) => page[key]?.events?.length)?.[key];
+    if (bucket) {
+      dropEvents(bucket, Math.max(1, Math.ceil(bucket.events.length / 4)));
+      return true;
+    }
+  }
+  // An old document's pending calls are historical evidence, never live blockers.
+  const old = pages.slice(0, -1).find((page) => page.pending?.length);
+  if (old) {
+    const removed = old.pending.splice(
+      0,
+      Math.max(1, Math.ceil(old.pending.length / 4)),
+    );
+    const info = ((old.completeness ??= {}).pending ??= {});
+    info.dropped = Number(info.dropped ?? 0) + removed.length;
+    info.truncated = true;
+    return true;
+  }
+  const current = pages.at(-1);
+  if (current?.pending?.length > 100) {
+    const removed = Math.min(
+      current.pending.length - 100,
+      Math.ceil(current.pending.length / 4),
+    );
+    for (let i = 0; i < removed; i++) {
+      const index = current.pending.findIndex(
+        (r: any) => !r.required && !r.operationId,
+      );
+      current.pending.splice(index < 0 ? 0 : index, 1);
+    }
+    const info = ((current.completeness ??= {}).pending ??= {});
+    info.dropped = Number(info.dropped ?? 0) + removed;
+    info.truncated = true;
+    return true;
+  }
+  const errors = pages.find((page) => page.errors?.events?.length)?.errors;
+  if (errors) {
+    dropEvents(errors, Math.max(1, Math.ceil(errors.events.length / 4)));
+    return true;
+  }
+  if (pages.length > 1) {
+    pages.shift();
+    return true;
+  }
+  return false;
+}

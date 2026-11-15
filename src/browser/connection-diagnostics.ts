@@ -1,4 +1,4 @@
-import { sanitizeDiagnosticRecord } from "../server/diagnostic-records";
+import { sanitizeDiagnosticRecord, trimDiagnosticPages } from "../server/diagnostic-records";
 /** Local, bounded transport evidence. Never collect message bodies or arbitrary strings. */
 type RecordValue = Record<string, unknown>;
 export type DiagnosticInput = {
@@ -526,12 +526,9 @@ export function createConnectionDiagnostics(
       const limits = { limitBytes: 2 * 1024 * 1024, truncated: false };
       while (new TextEncoder().encode(text).length > limits.limitBytes && evidence) {
         limits.truncated = true;
-        if (evidence.previousPages?.length) evidence.previousPages.shift();
-        else {
-          const bucket = [evidence.requests, evidence.performance, evidence.lifecycle, evidence.operationSteps, evidence.errors].find((b) => b?.events?.length);
-          if (!bucket) break;
-          const n = Math.max(1, Math.ceil(bucket.events.length / 4)); bucket.events.splice(0, n); bucket.dropped += n; bucket.truncated = true;
-        }
+        const pages = [...(evidence.previousPages ?? []), evidence];
+        if (!trimDiagnosticPages(pages)) break;
+        evidence.previousPages = pages.slice(0, -1);
         text = JSON.stringify({ ...report, exportLimits: limits }, null, 2);
       }
       return JSON.stringify({ ...report, exportLimits: limits }, null, 2);

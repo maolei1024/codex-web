@@ -414,6 +414,49 @@ test("storage expires on reload, tabs stay separate, and terminal outcomes canno
   assert.notEqual(first.journal.pageId, other.journal.pageId);
 });
 
+test("refresh floods preserve previous submission results and startup while applying tab-wide event caps", (t) => {
+  const storage = memoryStorage(),
+    first = fixture(t, storage);
+  first.journal.milestone("startup", "ready");
+  const id = first.journal.startOperation();
+  first.journal.step(id, "accepted", { outcome: "accepted" });
+  first.journal.error(new Error("Timeout"), { operationId: id });
+  for (let i = 0; i < 1000; i++)
+    first.journal.record("requests", {
+      method: "settings.subscribe",
+      phase: "completed",
+    });
+  first.journal.flush();
+  const second = fixture(t, storage);
+  for (let i = 0; i < 1200; i++)
+    second.journal.record("requests", {
+      method: "get-global-state",
+      phase: "completed",
+    });
+  second.journal.flush();
+  const third = fixture(t, storage),
+    report = third.journal.snapshot();
+  assert.equal(report.previousPages.length, 2);
+  assert.ok(
+    report.previousPages[0].operations.some(
+      (o) => o.id === id && o.outcome === "accepted",
+    ),
+  );
+  assert.equal(report.previousPages[0].startup[0].method, "startup");
+  assert.equal(report.previousPages[0].errors.events[0].operationId, id);
+  assert.ok(report.previousPages[0].requests.truncated);
+  assert.ok(
+    [report, ...report.previousPages].reduce(
+      (n, p) => n + p.requests.events.length,
+      0,
+    ) <= 1000,
+  );
+  assert.ok(
+    Buffer.byteLength(storage.getItem("codex-web-diagnostics-v2")) <=
+      1024 * 1024,
+  );
+});
+
 test("selected server records survive healthy idle periods and detailed snapshots stay bounded", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 1000 });
   const server = new ServerDiagnosticRecorder();
