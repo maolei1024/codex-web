@@ -208,6 +208,8 @@ function setup(t, { pathname = "/", search = "" } = {}) {
       windowEvents.get("online")();
     },
     pageshow: () => windowEvents.get("pageshow")({ persisted: true }),
+    freeze: () => documentEvents.get("freeze")(),
+    thaw: () => documentEvents.get("resume")(),
   };
 }
 
@@ -1332,3 +1334,39 @@ test("offline pauses an established recovery without renewing it, while manual p
   }
   assert.equal(bridge.shim.diagnostics().connection.state, "failed");
 });
+
+for (const blocking of ["offline", "frozen"]) {
+  test(`healthy hidden submission resumes after ${blocking} clears even while still hidden`, async (t) => {
+    const bridge = await readyBridge(t);
+    bridge.hide();
+    blocking === "offline" ? bridge.offline() : bridge.freeze();
+    let dispatched = 0;
+    const request = bridge.shim.appHost.fetchRequest(
+      "vscode://codex/get-global-state",
+      undefined,
+      async () => {
+        dispatched++;
+        return {};
+      },
+    );
+    await flush();
+    t.mock.timers.tick(11 * 60_000);
+    assert.equal(dispatched, 0);
+    bridge.shim.exportDiagnostics();
+    const report = JSON.parse(await bridge.downloads.at(-1).text());
+    assert.ok(
+      report.evidence.pending.some(
+        (x) =>
+          x.method === "get-global-state" &&
+          x.state === "waiting" &&
+          x.reason === blocking,
+      ),
+    );
+    blocking === "offline" ? bridge.online() : bridge.thaw();
+    await request;
+    assert.equal(dispatched, 1);
+    assert.equal(bridge.shim.diagnostics().connection.suspended, true);
+    assert.equal(bridge.sessions(), 1);
+    assert.equal(bridge.sockets.length, 1);
+  });
+}

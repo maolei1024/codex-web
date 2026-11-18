@@ -1,4 +1,7 @@
-import { sanitizeDiagnosticRecord, trimDiagnosticPages } from "../server/diagnostic-records";
+import {
+  sanitizeDiagnosticRecord,
+  trimDiagnosticPages,
+} from "../server/diagnostic-records";
 /** Local, bounded transport evidence. Never collect message bodies or arbitrary strings. */
 type RecordValue = Record<string, unknown>;
 export type DiagnosticInput = {
@@ -294,8 +297,22 @@ function localDiagnostics(value: unknown): RecordValue {
   booleans(app, appResult, [
     "exhausted",
     "suspended",
+    "executionBlocked",
     "authenticationRequired",
   ]);
+  const admissionReasons = new Set([
+    "hidden",
+    "frozen",
+    "offline",
+    "transport",
+    "startup",
+    "recovery",
+  ]);
+  appResult.suspensionReason = choice(app.suspensionReason, admissionReasons);
+  appResult.executionBlockReason = choice(
+    app.executionBlockReason,
+    admissionReasons,
+  );
   appResult.cycle =
     app.cycle == null ? null : numbers(app.cycle, ["retries", "remainingMs"]);
   appResult.requiredFailures = Array.isArray(app.requiredFailures)
@@ -408,13 +425,24 @@ function serverDiagnostics(value: unknown): RecordValue {
 function sanitizeServerEvidence(value: unknown) {
   const source = record(value);
   return {
-    ...numbers(source, ["capturedAt", "retentionMs", "dropped", "limit", "firstAt", "lastAt"]),
+    ...numbers(source, [
+      "capturedAt",
+      "retentionMs",
+      "dropped",
+      "limit",
+      "firstAt",
+      "lastAt",
+    ]),
     selected: source.selected === true,
     truncated: source.truncated === true,
-    status: ["available", "missing"].includes(String(source.status)) ? source.status : "missing",
+    status: ["available", "missing"].includes(String(source.status))
+      ? source.status
+      : "missing",
     process: sanitizeDiagnosticRecord(source.process),
     connection: sanitizeDiagnosticRecord(source.connection),
-    events: Array.isArray(source.events) ? source.events.slice(-500).map(sanitizeDiagnosticRecord) : [],
+    events: Array.isArray(source.events)
+      ? source.events.slice(-500).map(sanitizeDiagnosticRecord)
+      : [],
   };
 }
 async function readBoundedJson(
@@ -452,7 +480,12 @@ async function readBoundedJson(
 }
 
 export function createConnectionDiagnostics(
-  options: { now?: () => number; maxEvents?: number; evidence?: () => unknown; onRecord?: (type: string, details: RecordValue) => void } = {},
+  options: {
+    now?: () => number;
+    maxEvents?: number;
+    evidence?: () => unknown;
+    onRecord?: (type: string, details: RecordValue) => void;
+  } = {},
 ) {
   const now = options.now ?? Date.now;
   const limit = Math.max(
@@ -511,7 +544,9 @@ export function createConnectionDiagnostics(
     record(type: string, details?: unknown) {
       if (!EVENT_TYPES.has(type)) return;
       events.push({ at: now(), type, ...eventDetails(details) });
-      try { options.onRecord?.(type, eventDetails(details)); } catch {}
+      try {
+        options.onRecord?.(type, eventDetails(details));
+      } catch {}
       if (events.length > limit) {
         events.shift();
         droppedEvents++;
@@ -524,7 +559,10 @@ export function createConnectionDiagnostics(
       // Evidence has its own bounded rings; trim detail before dropping failures.
       const evidence = report.evidence as any;
       const limits = { limitBytes: 2 * 1024 * 1024, truncated: false };
-      while (new TextEncoder().encode(text).length > limits.limitBytes && evidence) {
+      while (
+        new TextEncoder().encode(text).length > limits.limitBytes &&
+        evidence
+      ) {
         limits.truncated = true;
         const pages = [...(evidence.previousPages ?? []), evidence];
         if (!trimDiagnosticPages(pages)) break;
@@ -556,13 +594,26 @@ export function createConnectionDiagnostics(
         return { ...local, server: snapshot().server };
       }
       serverStatus = "fetching";
-      trigger = ["open", "startup", "slow", "failure", "ready", "recovery"].includes(options.trigger ?? "") ? options.trigger! : "other";
+      trigger = [
+        "open",
+        "startup",
+        "slow",
+        "failure",
+        "ready",
+        "recovery",
+      ].includes(options.trigger ?? "")
+        ? options.trigger!
+        : "other";
       const controller = new AbortController();
       let active = true,
         timer: ReturnType<typeof setTimeout> | undefined;
       const work = (async () => {
         try {
-          const client = typeof options.clientId === "string" && /^[a-f0-9-]{16,64}$/.test(options.clientId) ? `?clientId=${options.clientId}` : "";
+          const client =
+            typeof options.clientId === "string" &&
+            /^[a-f0-9-]{16,64}$/.test(options.clientId)
+              ? `?clientId=${options.clientId}`
+              : "";
           const response = await fetcher(`/__backend/diagnostics${client}`, {
             credentials: "same-origin",
             cache: "no-store",

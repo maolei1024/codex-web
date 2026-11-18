@@ -29,6 +29,7 @@ export class DiagnosticRuntime {
   private projection = new Map<string, string>();
   private fetches = new Map<string, string>();
   private editorPending = false;
+  private preparations = new Map<string, number>();
   constructor(
     readonly journal: DiagnosticJournal,
     private currentScope: () => {
@@ -78,6 +79,7 @@ export class DiagnosticRuntime {
     this.journal.retireIdentity();
   }
   clear() {
+    this.preparations.clear();
     this.messages.clear();
     this.native.clear();
     this.turns.clear();
@@ -91,6 +93,49 @@ export class DiagnosticRuntime {
     this.messages.set(this.journal.alias(messageId), operationId);
     while (this.messages.size > 500)
       this.messages.delete(this.messages.keys().next().value!);
+  }
+  operationForMessage(message: any): string | undefined {
+    return (
+      this.id(message?.submissionOptions) ??
+      this.id(message) ??
+      this.messages.get(
+        this.journal.alias(typeof message === "object" ? message?.id : message),
+      )
+    );
+  }
+  preparationStart(message: unknown): string | undefined {
+    const id = this.operationForMessage(message);
+    if (!id) return;
+    if (!this.preparations.has(id) && this.preparations.size >= 50) return;
+    this.preparations.set(id, (this.preparations.get(id) ?? 0) + 1);
+    this.step(id, "preparing", { preparationActive: true, outcome: "pending" });
+    return id;
+  }
+  preparationEnd(id: string | undefined, error?: unknown) {
+    if (!id || !this.preparations.has(id)) return;
+    if (error != null) this.fail(id, error, "preparation");
+    const count = this.preparations.get(id)! - 1;
+    if (count > 0) {
+      this.preparations.set(id, count);
+      return;
+    }
+    this.preparations.delete(id);
+    const writing = [...this.native.values()].some(
+      (r) => r.operationId === id && WRITES.has(r.method),
+    );
+    this.step(id, "preparation-complete", {
+      preparationActive: false,
+      ...(writing || error != null ? {} : { outcome: "outcome-unknown" }),
+    });
+  }
+  /** A closure carries only this caller's context through the native fetch facade. */
+  fetcher<T extends (method: string, options?: any) => any>(
+    fetch: T,
+    operationId?: string,
+  ): T {
+    if (!operationId) return fetch;
+    return ((method: string, options?: any) =>
+      fetch(method, this.tag({ ...options }, operationId))) as T;
   }
   fetchStart(requestId: unknown, url: string, options: any) {
     const method = url.startsWith("vscode://codex/") ? url.slice(15) : "fetch";
@@ -108,9 +153,10 @@ export class DiagnosticRuntime {
       requestId: this.journal.wireId(requestId, this.clientId),
       connectionId: this.journal.wireId("connection", this.clientId),
       parentId:
-        method === "get-global-state"
+        options?.[Symbol.for("codex-web.diagnostic.request")] ??
+        (method === "get-global-state"
           ? this.journal.wireId(params?.key, this.clientId)
-          : undefined,
+          : undefined),
     });
     this.fetches.set(this.journal.alias(requestId), id);
     while (this.fetches.size > 1000)
@@ -155,6 +201,10 @@ export class DiagnosticRuntime {
       });
     if (phase === "end" && details.id) {
       this.journal.end(details.id, error, details);
+      return;
+    }
+    if (phase === "progress" && details.id) {
+      this.journal.progress(details.id, details);
       return;
     }
     if (phase === "stage") {

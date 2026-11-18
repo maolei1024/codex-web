@@ -20,6 +20,8 @@ type Pending = {
   required: boolean;
   fail(error: Error): void;
 };
+type SuspensionReason = "transport" | "hidden" | "offline" | "frozen";
+type DiagnosticContext = { operationId?: string; parentId?: string };
 export type RecoveryEvent = {
   at: number;
   generation: number;
@@ -89,9 +91,21 @@ export const STARTUP_FETCH_READS = new Set([
 ]);
 
 export class AppHostRecovery {
-  diagnosticObserver?: (phase: string, details: Record<string, unknown>, error?: unknown) => string | undefined;
-  private diagnostic(phase: string, details: Record<string, unknown>, error?: unknown) {
-    try { return this.diagnosticObserver?.(phase, details, error); } catch { return undefined; }
+  diagnosticObserver?: (
+    phase: string,
+    details: Record<string, unknown>,
+    error?: unknown,
+  ) => string | undefined;
+  private diagnostic(
+    phase: string,
+    details: Record<string, unknown>,
+    error?: unknown,
+  ) {
+    try {
+      return this.diagnosticObserver?.(phase, details, error);
+    } catch {
+      return undefined;
+    }
   }
   generation = 0;
   private factory?: () => Session;
@@ -108,7 +122,11 @@ export class AppHostRecovery {
   };
   private recoveryEpoch = 0;
   private resetWaiters = new Set<() => void>();
-  private suspension?: { done: Promise<void>; resume(): void };
+  private suspension?: {
+    reason: SuspensionReason;
+    done: Promise<void>;
+    resume(): void;
+  };
   private authRequired = false;
   private retrying = 0;
   private requiredFailures = new Set<string>();
@@ -144,6 +162,20 @@ export class AppHostRecovery {
   get suspended() {
     return this.suspension !== undefined;
   }
+  /** A hidden, usable page can finish work; its foreground clocks stay paused. */
+  get executionBlockReason(): string | undefined {
+    const reason = this.suspension?.reason;
+    if (reason !== "hidden") return reason;
+    if (
+      this.everReady &&
+      this.current &&
+      !this.cycle &&
+      !this.exhausted &&
+      !this.authRequired
+    )
+      return undefined;
+    return this.everReady ? "recovery" : "startup";
+  }
   get authenticationRequired() {
     return this.authRequired;
   }
@@ -153,13 +185,18 @@ export class AppHostRecovery {
     this.disconnect("authentication");
   }
   /** Background/offline time must not use the foreground recovery allowance. */
-  suspend(): void {
-    if (this.suspension) return;
+  suspend(reason: SuspensionReason = "transport"): void {
+    const previous = this.suspension;
+    if (previous?.reason === reason) return;
     let resume!: () => void;
     const done = new Promise<void>((resolve) => {
       resume = resolve;
     });
-    this.suspension = { done, resume };
+    this.suspension = { reason, done, resume };
+    // Re-evaluate admission when, e.g., frozen+hidden becomes only hidden.
+    // Changing a reason never restarts the paused clocks.
+    previous?.resume();
+    if (previous) return;
     clearTimeout(this.cycleTimer);
     if (this.cycle && Number.isFinite(this.cycle.deadline)) {
       this.cycle.suspendedRemainingMs = Math.max(
@@ -254,6 +291,9 @@ export class AppHostRecovery {
       subscriptions: this.subscriptions.size,
       exhausted: this.exhausted,
       suspended: this.suspended,
+      executionBlocked: this.executionBlockReason != null,
+      suspensionReason: this.suspension?.reason ?? null,
+      executionBlockReason: this.executionBlockReason ?? null,
       authenticationRequired: this.authRequired,
       cycle: this.cycle
         ? {
@@ -402,20 +442,49 @@ export class AppHostRecovery {
     optionalRead = false,
     operationId?: string,
   ): Promise<T> {
-    const id = this.diagnostic("begin", { method, layer: "apphost", hostId, threadId: params?.threadId,
-      required: !optionalRead && this.requiredNativeRead(method, hostId, params?.threadId) && (!this.everReady || !!this.cycle),
-      remainingMs: this.cycle ? (Number.isFinite(this.cycle.deadline) ? Math.max(0, this.cycle.deadline - this.now()) : this.cycle.remainingMs) : null,
-      optional: optionalRead, operationId });
+    const id = this.diagnostic("begin", {
+      method,
+      layer: "apphost",
+      hostId,
+      threadId: params?.threadId,
+      required:
+        !optionalRead &&
+        this.requiredNativeRead(method, hostId, params?.threadId) &&
+        (!this.everReady || !!this.cycle),
+      remainingMs: this.cycle
+        ? Number.isFinite(this.cycle.deadline)
+          ? Math.max(0, this.cycle.deadline - this.now())
+          : this.cycle.remainingMs
+        : null,
+      optional: optionalRead,
+      operationId,
+    });
     try {
-      const value = await this.runNativeRequest(method, operation, hostId, params, optionalRead);
+      const value = await this.runNativeRequest(
+        method,
+        operation,
+        hostId,
+        params,
+        optionalRead,
+      );
       this.diagnostic("end", { id, method, layer: "apphost", operationId });
       return value;
     } catch (error) {
-      this.diagnostic("end", { id, method, layer: "apphost", operationId }, error);
+      this.diagnostic(
+        "end",
+        { id, method, layer: "apphost", operationId },
+        error,
+      );
       throw error;
     }
   }
-  private async runNativeRequest<T>(method: string, operation: (timeoutMs?: number) => Promise<T>, hostId?: string, params?: { threadId?: string }, optionalRead = false): Promise<T> {
+  private async runNativeRequest<T>(
+    method: string,
+    operation: (timeoutMs?: number) => Promise<T>,
+    hostId?: string,
+    params?: { threadId?: string },
+    optionalRead = false,
+  ): Promise<T> {
     // Once ready, a read preparing a user write fails back to that caller. It
     // must never keep a pending send alive until a later automatic recovery.
     if (
@@ -456,7 +525,13 @@ export class AppHostRecovery {
     });
   }
   private record(method: string, phase: string, start: number, reason = "") {
-    this.diagnostic("stage", { method, phase, reason, elapsedMs: this.now() - start, generation: this.generation });
+    this.diagnostic("stage", {
+      method,
+      phase,
+      reason,
+      elapsedMs: this.now() - start,
+      generation: this.generation,
+    });
     this.events.push({
       at: this.now(),
       generation: this.generation,
@@ -549,15 +624,23 @@ export class AppHostRecovery {
   }
   private attempt<T>(
     method: string,
-    operation: () => PromiseLike<T>,
+    operation: (requestId?: string) => PromiseLike<T>,
     close: boolean,
     bounded = true,
     cancel?: () => void,
+    context: DiagnosticContext = {},
   ): Promise<T> {
     const generation = this.generation;
     const epoch = this.recoveryEpoch;
     const start = this.now();
-    const diagnosticId = this.diagnostic("begin", { method, layer: "apphost", required: bounded, generation, remainingMs: bounded ? 15_000 : null });
+    const diagnosticId = this.diagnostic("begin", {
+      method,
+      layer: "apphost",
+      required: bounded,
+      generation,
+      remainingMs: bounded ? 15_000 : null,
+      ...context,
+    });
     const deadline = bounded
       ? Math.min(start + 15_000, this.cycle?.deadline ?? Infinity)
       : Infinity;
@@ -567,7 +650,11 @@ export class AppHostRecovery {
       const finish = (error?: Error, value?: T) => {
         if (done) return;
         done = true;
-        this.diagnostic("end", { id: diagnosticId, method, layer: "apphost", generation }, error);
+        this.diagnostic(
+          "end",
+          { id: diagnosticId, method, layer: "apphost", generation },
+          error,
+        );
         clearTimeout(pending.timer);
         this.pending.delete(pending);
         this.record(
@@ -626,7 +713,7 @@ export class AppHostRecovery {
         .then(() => {
           if (done || generation !== this.generation)
             throw new RecoveryError(method, "stale");
-          return operation();
+          return operation(diagnosticId);
         })
         .then(
           (value) => finish(undefined, value),
@@ -723,9 +810,25 @@ export class AppHostRecovery {
   }
   private async retry<T>(
     method: string,
-    operation: (checkCurrent: () => void) => Promise<T>,
+    operation: (checkCurrent: () => void, parentId?: string) => Promise<T>,
     signal?: AbortSignal,
+    context: DiagnosticContext = {},
   ): Promise<T> {
+    const remainingMs = Math.min(
+      15_000,
+      this.cycle?.suspendedRemainingMs ??
+        this.cycle?.remainingMs ??
+        (this.cycle ? Math.max(0, this.cycle.deadline - this.now()) : 15_000),
+    );
+    const diagnosticId = this.diagnostic("begin", {
+      method,
+      layer: "apphost",
+      source: "admission",
+      generation: this.generation,
+      remainingMs,
+      ...context,
+    });
+    let failure: unknown;
     const epoch = this.recoveryEpoch;
     let cancel!: () => void;
     let abort!: () => void;
@@ -745,7 +848,12 @@ export class AppHostRecovery {
     };
     const active = async () => {
       checkCurrent();
-      while (this.suspension) {
+      while (this.executionBlockReason && this.suspension) {
+        this.diagnostic("progress", {
+          id: diagnosticId,
+          state: "waiting",
+          reason: this.executionBlockReason,
+        });
         await Promise.race([this.suspension.done, cancelled]);
         checkCurrent();
       }
@@ -755,13 +863,18 @@ export class AppHostRecovery {
     try {
       for (;;) {
         await active();
+        this.diagnostic("progress", {
+          id: diagnosticId,
+          state: "active",
+          reason: "ready",
+        });
         // Routine reads/subscriptions continue after startup. Only an actual
         // disconnect (or initial startup) opens the shared recovery budget.
         // attempt() still bounds these reads and disconnects on transport loss.
         if (!this.everReady || this.cycle || !this.current) this.budget();
         try {
           const value = await Promise.race([
-            operation(checkCurrent),
+            operation(checkCurrent, diagnosticId),
             cancelled,
           ]);
           checkCurrent();
@@ -801,7 +914,15 @@ export class AppHostRecovery {
           this.budget();
         }
       }
+    } catch (error) {
+      failure = error;
+      throw error;
     } finally {
+      this.diagnostic(
+        "end",
+        { id: diagnosticId, method, layer: "apphost", ...context },
+        failure,
+      );
       this.resetWaiters.delete(cancel);
       signal?.removeEventListener("abort", abort);
       this.retrying--;
@@ -818,8 +939,9 @@ export class AppHostRecovery {
   async fetchRequest<T>(
     url: string,
     signal: AbortSignal | undefined,
-    operation: (signal: AbortSignal) => Promise<T>,
+    operation: (signal: AbortSignal, requestId?: string) => Promise<T>,
     body?: unknown,
+    context: DiagnosticContext = {},
   ): Promise<T> {
     const endpoint = url.startsWith("vscode://codex/")
       ? url.slice("vscode://codex/".length)
@@ -837,20 +959,23 @@ export class AppHostRecovery {
       STARTUP_FETCH_READS.has(method) &&
       (hostId == null || hostId === this.activeScope().hostId) &&
       hostId !== "durable";
-    const run = () => {
+    const run = (parentId?: string) => {
       signal?.throwIfAborted();
       const controller = new AbortController();
       const abort = () => controller.abort(signal?.reason);
       signal?.addEventListener("abort", abort, { once: true });
       return this.attempt(
         method,
-        () => operation(controller.signal),
+        (requestId) => operation(controller.signal, requestId),
         false,
         readonly,
         () => controller.abort(new RecoveryError(method, "disconnected")),
+        { ...context, parentId: parentId ?? context.parentId },
       ).finally(() => signal?.removeEventListener("abort", abort));
     };
-    return readonly ? this.retry(method, run, signal) : run();
+    return readonly
+      ? this.retry(method, (_check, parentId) => run(parentId), signal, context)
+      : run();
   }
   /** Manual retry isolates every pending caller from the previous allowance. */
   async recover(manual = false) {
@@ -881,7 +1006,11 @@ export class AppHostRecovery {
     for (const key of path.slice(0, -1)) receiver = receiver?.[key];
     return { receiver, callable: receiver?.[path.at(-1)!] };
   }
-  private invoke(path: string[], args: unknown[]) {
+  private invoke(
+    path: string[],
+    args: unknown[],
+    context: DiagnosticContext = {},
+  ) {
     const method = path.join(".");
     const { receiver, callable } = this.native(path);
     if (!callable)
@@ -899,6 +1028,8 @@ export class AppHostRecovery {
       READS.has(method) ||
         SUBSCRIPTIONS.has(method) ||
         method === "localThreadCatalog.setSourceEnabled",
+      undefined,
+      context,
     );
     // Desktop explicitly disposes RpcPromises (including HTTP streaming calls).
     // Preserve that protocol instead of returning an incompatible bare Promise.
@@ -1027,10 +1158,10 @@ export class AppHostRecovery {
           }
         }
         const task = READS.has(method)
-          ? this.retry(method, async (checkCurrent) => {
+          ? this.retry(method, async (checkCurrent, parentId) => {
               await this.connect();
               checkCurrent();
-              return this.invoke(path, args);
+              return this.invoke(path, args, { parentId });
             })
           : this.invoke(path, args); // Writes have exactly one delivery attempt.
         if (method === "localThreadCatalog.setSourceEnabled") {

@@ -1177,3 +1177,111 @@ test("foreground SSH recovery requires that host and conversation, not other hos
   assert.equal(env.coordinator.failed, false);
   assert.equal(env.coordinator.diagnostics().stages.history.state, "completed");
 });
+
+async function readyForBackground(t) {
+  const env = setup(t);
+  const services = await env.coordinator.start();
+  await services.settings.readAll();
+  await services.startup.whenReady();
+  for (const method of ["config/read", "configRequirements/read", "model/list"])
+    env.coordinator.observeNative({ method, type: "completed" });
+  assert.equal(env.coordinator.diagnostics().cycle, null);
+  return { ...env, services };
+}
+
+test("a healthy hidden page completes state reads and submission after eleven minutes without a resume", async (t) => {
+  const { coordinator, services } = await readyForBackground(t);
+  coordinator.suspend("hidden");
+  assert.equal(coordinator.suspended, true);
+  assert.equal(coordinator.executionBlockReason, undefined);
+  let release,
+    submitted = 0;
+  const task = (async () => {
+    await coordinator.fetchRequest(
+      "vscode://codex/get-global-state",
+      undefined,
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    await services.settings.readAll();
+    await coordinator.fetchRequest(
+      "vscode://codex/codex-home",
+      undefined,
+      async () => ({}),
+    );
+    return coordinator.nativeRequest("turn/start", async () => {
+      submitted++;
+      return "accepted";
+    });
+  })();
+  await settle();
+  t.mock.timers.tick(11 * 60_000);
+  coordinator.checkDeadlines();
+  assert.equal(coordinator.failed, false);
+  release({});
+  assert.equal(await task, "accepted");
+  assert.equal(submitted, 1);
+  assert.equal(coordinator.suspended, true);
+  assert.equal(coordinator.diagnostics().cycle, null);
+});
+
+for (const reason of ["offline", "frozen", "transport"]) {
+  test(`hidden plus ${reason} blocks until that reason is removed without spending time`, async (t) => {
+    const { coordinator } = await readyForBackground(t);
+    coordinator.suspend("hidden");
+    coordinator.suspend(reason);
+    let dispatched = 0;
+    const request = coordinator.fetchRequest(
+      "vscode://codex/get-global-state",
+      undefined,
+      async () => {
+        dispatched++;
+        return {};
+      },
+    );
+    await settle();
+    t.mock.timers.tick(11 * 60_000);
+    assert.equal(dispatched, 0);
+    assert.equal(coordinator.executionBlockReason, reason);
+    coordinator.suspend("hidden");
+    await request;
+    assert.equal(dispatched, 1);
+    assert.equal(coordinator.suspended, true);
+    assert.equal(coordinator.failed, false);
+  });
+}
+
+test("hidden initial startup and broken AppHost remain gated; healthy background errors are not retried", async (t) => {
+  const { coordinator } = await readyForBackground(t);
+  coordinator.suspend("hidden");
+  let attempts = 0;
+  await assert.rejects(
+    coordinator.fetchRequest(
+      "vscode://codex/get-global-state",
+      undefined,
+      async () => {
+        attempts++;
+        throw Error("synthetic application failure");
+      },
+    ),
+  );
+  assert.equal(attempts, 1);
+  coordinator.disconnect();
+  assert.equal(coordinator.executionBlockReason, "recovery");
+  const controller = new AbortController();
+  const request = coordinator.fetchRequest(
+    "vscode://codex/get-global-state",
+    controller.signal,
+    async () => {
+      attempts++;
+    },
+  );
+  await settle();
+  controller.abort();
+  await assert.rejects(request, { name: "AbortError" });
+  coordinator.resume();
+  await settle();
+  assert.equal(attempts, 1);
+});

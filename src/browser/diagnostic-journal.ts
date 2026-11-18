@@ -212,6 +212,19 @@ export class DiagnosticJournal {
     this.activity(false);
     return id;
   }
+  progress(id: string, details: Record<string, unknown>) {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    const clock = this.clock();
+    const update = sanitizeDiagnosticRecord(details);
+    if (update.state === "active" && pending.executionStartMono == null) {
+      update.executionStartMono = clock.mono;
+      update.admissionWaitMs = clock.mono - Number(pending.mono);
+    }
+    // Keep the original clock for total/foreground durations.
+    Object.assign(pending, update);
+    this.record("requests", { ...pending, ...clock, phase: "progress" });
+  }
   end(id: string, error?: unknown, details: Record<string, unknown> = {}) {
     const pending = this.pending.get(id);
     this.pending.delete(id);
@@ -222,6 +235,16 @@ export class DiagnosticJournal {
       id,
       reason: error == null ? "ok" : "error",
       elapsedMs: pending ? clock.mono - Number(pending.mono) : null,
+      ...(pending?.source === "admission"
+        ? {
+            admissionWaitMs:
+              pending.admissionWaitMs ?? clock.mono - Number(pending.mono),
+            executionElapsedMs:
+              pending.executionStartMono == null
+                ? 0
+                : clock.mono - Number(pending.executionStartMono),
+          }
+        : {}),
       activeElapsedMs: pending
         ? clock.activeMs - Number(pending.activeMs)
         : null,
@@ -272,6 +295,7 @@ export class DiagnosticJournal {
     if (
       phase === "unlocked" &&
       operation.outcome === "pending" &&
+      operation.preparationActive !== true &&
       ![...this.pending.values()].some((request) => request.operationId === id)
     )
       details = { ...details, outcome: "outcome-unknown" };
@@ -352,6 +376,15 @@ export class DiagnosticJournal {
     return [...this.pending.values()].map((v) => ({
       ...v,
       elapsedMs: now.mono - Number(v.mono),
+      ...(v.source === "admission"
+        ? {
+            admissionWaitMs: v.admissionWaitMs ?? now.mono - Number(v.mono),
+            executionElapsedMs:
+              v.executionStartMono == null
+                ? 0
+                : now.mono - Number(v.executionStartMono),
+          }
+        : {}),
       activeElapsedMs: now.activeMs - Number(v.activeMs),
       remainingMs:
         typeof v.remainingMs === "number"

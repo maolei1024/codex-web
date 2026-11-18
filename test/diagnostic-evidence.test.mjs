@@ -553,3 +553,100 @@ test("selected server records survive healthy idle periods and detailed snapshot
   assert.ok(report.dropped >= 201);
   assert.ok(Buffer.byteLength(JSON.stringify(report)) <= 192 * 1024);
 });
+
+test("native preparation remains pending after composer unlock and finishes without idle polling", (t) => {
+  const { journal, runtime, advance } = fixture(t);
+  const options = {},
+    id = runtime.start(options);
+  runtime.bindMessage("queued-message", id);
+  const outer = runtime.preparationStart({ id: "queued-message" });
+  const inner = runtime.preparationStart({ id: "queued-message" });
+  runtime.step(id, "unlocked", { locked: false });
+  advance(4000);
+  assert.equal(journal.snapshot().operations[0].outcome, "pending");
+  assert.equal(journal.hasSlowActivity(), true);
+  runtime.preparationEnd(inner);
+  assert.equal(journal.snapshot().operations[0].preparationActive, true);
+  runtime.preparationEnd(outer);
+  assert.equal(journal.snapshot().operations[0].outcome, "outcome-unknown");
+  assert.equal(journal.snapshot().operations[0].preparationActive, false);
+  assert.equal(journal.hasSlowActivity(), false);
+});
+
+test("admission waits preserve monotonic durations and causal parents without leaking request payloads", (t) => {
+  const { journal, runtime, advance } = fixture(t);
+  const id = runtime.start({});
+  const request = runtime.appHost("begin", {
+    method: "get-global-state",
+    source: "admission",
+    remainingMs: 15000,
+    operationId: id,
+  });
+  journal.lifecycle("visibility", { hidden: true });
+  runtime.appHost("progress", {
+    id: request,
+    state: "waiting",
+    reason: "frozen",
+  });
+  advance(11 * 60_000);
+  let pending = journal.pendingDetails()[0];
+  assert.equal(pending.admissionWaitMs, 660000);
+  assert.equal(pending.activeElapsedMs, 0);
+  assert.equal(pending.remainingMs, 15000);
+  runtime.appHost("progress", {
+    id: request,
+    state: "active",
+    reason: "ready",
+  });
+  const options = runtime.tag(
+    {
+      body: JSON.stringify({
+        key: "secret/path?token=credential",
+        value: "private-body",
+      }),
+      [Symbol.for("codex-web.diagnostic.request")]: request,
+    },
+    id,
+  );
+  runtime.fetchStart("wire", "vscode://codex/get-global-state", options);
+  advance(300);
+  runtime.fetchEnd("wire");
+  runtime.appHost("end", { id: request });
+  const report = journal.snapshot(),
+    serialized = JSON.stringify(report);
+  const ended = report.requests.events.find(
+    (x) => x.id === request && x.phase === "end",
+  );
+  assert.equal(ended.admissionWaitMs, 660000);
+  assert.equal(ended.executionElapsedMs, 300);
+  assert.equal(ended.backgroundElapsedMs, 660300);
+  assert.ok(
+    report.requests.events.some(
+      (x) =>
+        x.layer === "ipc" && x.parentId === request && x.operationId === id,
+    ),
+  );
+  assert.ok(!/private-body|credential|secret\/path/.test(serialized));
+});
+
+test("concurrent fetch closures carry only their own submission context", async (t) => {
+  const { runtime } = fixture(t),
+    calls = [];
+  const fetch = async (_method, options) => {
+    await Promise.resolve();
+    calls.push(runtime.id(options));
+    return options.params;
+  };
+  const a = runtime.start({}),
+    b = runtime.start({});
+  const fa = runtime.fetcher(fetch, a),
+    fb = runtime.fetcher(fetch, b);
+  const params = { value: "synthetic" };
+  await Promise.all([
+    fa("get-global-state", { params }),
+    fetch("get-global-state", { params }),
+    fb("get-global-state", { params }),
+  ]);
+  assert.deepEqual(calls, [a, undefined, b]);
+  assert.equal(runtime.id(params), undefined);
+});

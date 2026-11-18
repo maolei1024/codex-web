@@ -1,0 +1,248 @@
+--- a/webview/assets/app-shared-8340f229c2b3.js
++++ b/webview/assets/app-shared-8340f229c2b3.js
+@@ -168714,9 +168714,13 @@
+     getSubmissionIntent: l,
+   };
+   async function a(e, t, r, a, l, d, f, p, m) {
++    const diagnostic = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime;
++    const diagnosticId = diagnostic?.preparationStart(e.message);
++    let diagnosticError;
++    try {
+     let { conversationId: h, message: g } = e,
+       _ = await s(e);
+-    if (u(e, _, !1)) return i(h, g, e.editPosition, d, p, m);
++    if (u(e, _, !1)) return await i(h, g, e.editPosition, d, p, m);
+     let v = async (r) => {
+         let i = await t(e, r),
+           a = e.editPosition;
+@@ -168768,10 +168772,12 @@
+         )));
+     }
+     if (x.status === `deferred` && a != null && !a()) throw new wH();
+-    if (x.status === `deferred` && b) return i(h, g, e.editPosition, d, p, m);
++    if (x.status === `deferred` && b) return await i(h, g, e.editPosition, d, p, m);
+     if (x.status !== `sent`)
+       throw Error(`Explicit message submission was not sent`);
+     return { status: `sent`, messageId: g.id, turnId: x.turnId };
++    } catch (error) { diagnosticError = error; throw error; }
++    finally { diagnostic?.preparationEnd(diagnosticId, diagnosticError); }
+   }
+   async function o(n, r, i, a, o, s, c, l) {
+     if (!t()) throw Error(`Turn coordinator retired`);
+@@ -169062,6 +169068,9 @@
+           );
+         }
+         async sendMessage(e, t, n, r, i) {
++          const diagnostic = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime;
++          const diagnosticId = diagnostic?.preparationStart(e.message);
++          let diagnosticError;
+           try {
+             var a = GI();
+             if (this.disposed) throw Error(`Turn coordinator retired`);
+@@ -169127,7 +169136,7 @@
+                   await this.#v(
+                     l,
+                     (e) => this.#r(e, t, c.editPosition),
+-                    `edit`,
++                    `edit`, true, [], diagnosticId,
+                   );
+                   try {
+                     Promise.resolve(n?.({ locallyAccepted: !0 })).catch(
+@@ -169146,9 +169155,9 @@
+                   e
+                 );
+               }
+-              return this.options.getStreamRole(l)?.role === `follower`
++              return await (this.options.getStreamRole(l)?.role === `follower`
+                 ? (this.#p(l, u.id), { status: `queued`, messageId: u.id })
+-                : (this.#s(l), a.result.promise);
++                : (this.#s(l), a.result.promise));
+             }
+             return (
+               a.u(this.deferAutomaticTurns(l)),
+@@ -169164,9 +169173,10 @@
+               )
+             );
+           } catch (e) {
++            diagnosticError = e;
+             a.e = e;
+           } finally {
+-            a.d();
++            try { a.d(); } finally { diagnostic?.preparationEnd(diagnosticId, diagnosticError); }
+           }
+         }
+         async sendQueuedMessageNow(e, t, n, r, i) {
+@@ -169796,6 +169806,8 @@
+           };
+         }
+         async #d(e, t, n) {
++          const diagnostic = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime;
++          let diagnosticId, diagnosticError;
+           let r,
+             i = !1,
+             a = null,
+@@ -169860,6 +169872,9 @@
+               )
+                 return;
+             }
++            diagnosticId = diagnostic?.preparationStart(r);
++            diagnostic?.tag(u, diagnosticId);
++            diagnostic?.step(diagnosticId, "queue-lock");
+             if (
+               !d() ||
+               r == null ||
+@@ -169882,6 +169897,7 @@
+             if (m && this.options.requiresReplayAdmission && f == null) return;
+             let h = p ?? (m && f != null ? () => f(e) : void 0),
+               g = async () => {
++                diagnostic?.step(diagnosticId, "queue-refresh");
+                 for (; this.queueRefresh != null; ) await this.queueRefresh;
+                 if (
+                   !d(!1) ||
+@@ -170041,6 +170057,7 @@
+                 )),
+               c.onResult?.(e, r, b));
+           } catch (i) {
++            diagnosticError = i;
+             if (i instanceof wH || (n == null && i instanceof DB)) {
+               if (
+                 r?.submission?.status === `sending` &&
+@@ -170134,6 +170151,7 @@
+               );
+             }
+             (i && t.releaseStartTurn(e), n != null && this.#s(e));
++            diagnostic?.preparationEnd(diagnosticId, diagnosticError);
+           }
+         }
+         #f(e, t) {
+@@ -170277,9 +170295,11 @@
+             n,
+           );
+         };
+-        async #v(e, t, n, r = !0, i = []) {
++        async #v(e, t, n, r = !0, i = [], diagnosticId = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.id(n)) {
+           if (this.disposed)
+             return Promise.reject(Error(`Queued message coordinator retired`));
++          const diagnostic = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime;
++          diagnostic?.step(diagnosticId, "state-write");
+           let a = this.#m(e) ?? EH;
+           if (typeof n == `function` && !n()) return a;
+           let o = t(a),
+@@ -170315,7 +170335,7 @@
+                   ((a = r[e] ?? EH), (o = t(a)));
+                   let s = { ...r };
+                   return (o.length === 0 ? delete s[e] : (s[e] = o), s);
+-                }),
++                }, diagnosticId),
+                   !this.disposed &&
+                     this.options.getStreamRole(e)?.role === `owner` &&
+                     this.options.coordination
+@@ -170586,8 +170606,8 @@
+       load: () =>
+         i.loadQueuedFollowUps?.() ??
+         Promise.reject(Error(`Queued message storage is unavailable`)),
+-      update: (e) =>
+-        i.updateQueuedFollowUps?.(e) ??
++      update: (e, diagnosticId) =>
++        i.updateQueuedFollowUps?.(e, diagnosticId) ??
+         Promise.reject(Error(`Queued message storage is unavailable`)),
+     },
+   });
+@@ -170627,6 +170647,9 @@
+   s,
+ ) {
+   return async (c, l) => {
++    const diagnostic = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime;
++    const diagnosticId = diagnostic?.operationForMessage(l);
++    diagnostic?.step(diagnosticId, "configuration");
+     let u = l.submissionOptions,
+       d = l.context.workPermissions,
+       f = d != null,
+@@ -170711,7 +170734,7 @@
+                 await e.sendRequest(`config/read`, {
+                   includeLayers: !1,
+                   cwd: l.cwd,
+-                })
++                }, diagnostic?.tag({}, diagnosticId))
+               ).config,
+             )
+           : null,
+@@ -182905,8 +182928,9 @@
+             onResponseHeaders: a,
+           });
+         }
+-        async post(e, t, n, r, i, a, o, s) {
++        async post(e, t, n, r, i, a, o, s, diagnosticId) {
+           return this.sendRequest(`POST`, e, {
++            [Symbol.for("codex-web.diagnostic.operation")]: diagnosticId,
+             body: t,
+             headers: n,
+             signal: r,
+@@ -183237,7 +183261,7 @@
+         }
+         async sendRequest(e, t, n) {
+           return window.__ELECTRON_SHIM__.appHost.fetchRequest(t, n?.signal,
+-            signal => this.sendRequestOnce(e, t, { ...n, signal }), n?.body);
++            (signal, parentId) => this.sendRequestOnce(e, t, { ...n, signal, [Symbol.for("codex-web.diagnostic.request")]: parentId }), n?.body, { operationId: globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.id(n) });
+         }
+         async sendRequestOnce(e, t, n) {
+           if (
+@@ -187943,16 +187967,16 @@
+       source: o,
+       responsePriority: s,
+     } = n ?? {};
+-  return yDn(t, r, i, a, o, s);
+-}
+-async function yDn(e, t, n, r, i, a) {
++  return yDn(t, r, i, a, o, s, globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime?.id(n));
++}
++async function yDn(e, t, n, r, i, a, diagnosticId) {
+   let o = (
+     await AW.getInstance().post(
+       `vscode://codex/${e}`,
+       JSON.stringify(t),
+       xDn(i),
+       r,
+-      a,
++      a, undefined, undefined, undefined, diagnosticId,
+     )
+   ).body;
+   return n ? n(o) : o;
+@@ -201851,12 +201875,14 @@
+       });
+       return ODn(Nj.QUEUED_FOLLOW_UPS, e) ?? {};
+     },
+-    updateQueuedFollowUps: (n) => {
++    updateQueuedFollowUps: (n, diagnosticId) => {
+       if (e == null)
+         return Promise.reject(
+           Error(`Global-state updates require an app scope`),
+         );
+-      let r = () => wDn(e, Nj.QUEUED_FOLLOW_UPS, (e) => n(e ?? {}), t),
++      const diagnostic = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime;
++      const fetch = diagnostic?.fetcher(t, diagnosticId) ?? t;
++      let r = () => wDn(e, Nj.QUEUED_FOLLOW_UPS, (e) => n(e ?? {}), fetch),
+         i = globalThis.navigator?.locks;
+       return i == null ? r() : i.request(`codex-queued-follow-up-state`, r);
+     },
+@@ -201939,14 +201965,18 @@
+       releaseStartTurn: hzn,
+       readPassiveContext: e == null ? void 0 : (t, n, r) => MUn(e, t, n, r),
+       acquireSendLock: async (e, n) => {
++        const diagnostic = globalThis.window?.__ELECTRON_SHIM__?.diagnosticRuntime;
++        const operationId = diagnostic?.operationForMessage(n);
++        diagnostic?.step(operationId, "queue-lock");
++        const fetch = diagnostic?.fetcher(t, operationId) ?? t;
+         let r = JT(),
+-          { acquired: i } = await t(`queued-follow-up-send-lock-acquire`, {
++          { acquired: i } = await fetch(`queued-follow-up-send-lock-acquire`, {
+             params: { conversationId: e, messageId: n, lockId: r },
+           });
+         return i
+           ? {
+               release: async (i) => {
+-                await t(`queued-follow-up-send-lock-release`, {
++                await fetch(`queued-follow-up-send-lock-release`, {
+                   params: {
+                     conversationId: e,
+                     messageId: n,

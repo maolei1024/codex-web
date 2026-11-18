@@ -185,7 +185,10 @@ timeouts. Events contain methods, phases, durations and counts, never request
 arguments, messages, drafts, credentials or feature-assignment payloads.
 
 Browser recovery pauses its timers while the page is hidden, frozen or reporting
-offline. Returning probes an open connection afresh and continues pending requests,
+offline. Hiding an already-ready page with a usable connection pauses clocks without
+blocking normal state reads or a submission already being prepared. Offline, frozen,
+uninitialized and recovering sessions retain their execution gates. Returning probes
+an open connection afresh and continues pending requests,
 handshakes, backoff and service recovery without replacing their attempt. After the
 page has become ready, transport and required session recovery share one 30-second
 foreground allowance; switching tabs or reaching a new phase never replenishes it.
@@ -207,7 +210,10 @@ and adds independent startup/recovery milestones, pending readiness calls, submi
 operations, errors and browser performance evidence. Foreground online, background
 and offline intervals are exclusive; cache/live content presentation is distinguished.
 Request, host and thread identifiers are anonymous within the report. Explicit
-operation context links configuration and native writes; unrelated background calls
+operation context links queue locks, state updates, configuration and native writes.
+Admission waits are registered before dispatch and report their reason separately
+from execution time. Composer unlock does not finish an active native preparation.
+Unrelated background calls
 are never attributed by timing. A socket write or IPC acknowledgement means the
 submission outcome is still unknown until a business response arrives.
 

@@ -226,24 +226,39 @@ let noticeTimer: number | undefined;
 let immediateRecoveryNotice = false;
 let lastRecordedState = "";
 let diagnosticStorage: Storage | undefined;
-try { diagnosticStorage = window.sessionStorage; } catch {}
+try {
+  diagnosticStorage = window.sessionStorage;
+} catch {}
 const diagnosticJournal = new DiagnosticJournal({ storage: diagnosticStorage });
-const diagnosticRuntime = diagnosticObserver(new DiagnosticRuntime(diagnosticJournal, () => ({
-  hostId: new URLSearchParams(window.location.search).get("hostId") ?? "local",
-  threadId: persistedThreadId(window.location.pathname) ?? undefined,
-})));
-try { installDiagnosticObservers(diagnosticJournal); } catch {}
+const diagnosticRuntime = diagnosticObserver(
+  new DiagnosticRuntime(diagnosticJournal, () => ({
+    hostId:
+      new URLSearchParams(window.location.search).get("hostId") ?? "local",
+    threadId: persistedThreadId(window.location.pathname) ?? undefined,
+  })),
+);
+try {
+  installDiagnosticObservers(diagnosticJournal);
+} catch {}
 const connectionDiagnostics = createConnectionDiagnostics({
   evidence: () => diagnosticJournal.snapshot(),
   onRecord: (type, details) => {
     if (type === "recovery-start") diagnosticJournal.beginRecovery();
     diagnosticJournal.record("lifecycle", { phase: type, ...details });
-    if (type === "socket-connect") diagnosticJournal.milestone("socket", "begin", details);
-    if (type === "socket-open") diagnosticJournal.milestone("socket", "end", details);
-    if (type === "recovery-state" && details.state === "connected") diagnosticJournal.milestone("startup", "ready", { generation: appHostRecovery.generation });
+    if (type === "socket-connect")
+      diagnosticJournal.milestone("socket", "begin", details);
+    if (type === "socket-open")
+      diagnosticJournal.milestone("socket", "end", details);
+    if (type === "recovery-state" && details.state === "connected")
+      diagnosticJournal.milestone("startup", "ready", {
+        generation: appHostRecovery.generation,
+      });
   },
 });
-diagnosticJournal.onIdentityChanged = () => { diagnosticRuntime.clear(); connectionDiagnostics.clearServerSnapshot(); };
+diagnosticJournal.onIdentityChanged = () => {
+  diagnosticRuntime.clear();
+  connectionDiagnostics.clearServerSnapshot();
+};
 const transportWindow = new TransportRecoveryWindow(() => {
   connectionDiagnostics.record("watchdog-timeout", {
     reason: "recovery-timeout",
@@ -388,7 +403,8 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
   if (message.type === "ipc-main-event") {
     if (message.channel === MESSAGE_FOR_VIEW_CHANNEL) {
       const payload = message.args[0];
-      if (isRecord(payload) && payload.type === "mcp-response") diagnosticRuntime.backendReply(payload.hostId, payload.message);
+      if (isRecord(payload) && payload.type === "mcp-response")
+        diagnosticRuntime.backendReply(payload.hostId, payload.message);
       reconnectRecovery.observe(payload);
       if (
         hasReconnected &&
@@ -405,7 +421,12 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
   if (message.type === "ipc-renderer-invoke-result") {
     const diagnosticRpc = diagnosticInvokes.get(message.requestId);
     if (diagnosticRpc) {
-      if (message.ok) diagnosticRuntime.delivered(diagnosticRpc.hostId, diagnosticRpc.id, "acknowledged");
+      if (message.ok)
+        diagnosticRuntime.delivered(
+          diagnosticRpc.hostId,
+          diagnosticRpc.id,
+          "acknowledged",
+        );
       diagnosticInvokes.delete(message.requestId);
     }
     if (
@@ -737,13 +758,14 @@ let serverDiagnosticInFlight: Promise<unknown> | undefined;
 let diagnosticPump: ReturnType<typeof setTimeout> | undefined;
 diagnosticJournal.onActivity = (failure) => {
   if (failure) collectServerDiagnostics("failure");
-  if (!diagnosticPump) diagnosticPump = setTimeout(function check() {
-    diagnosticPump = undefined;
-    if (diagnosticJournal.hasSlowActivity() && !pageHidden && !offlineHint) {
-      collectServerDiagnostics("slow");
-      diagnosticPump = setTimeout(check, 10_000);
-    }
-  }, 3000);
+  if (!diagnosticPump)
+    diagnosticPump = setTimeout(function check() {
+      diagnosticPump = undefined;
+      if (diagnosticJournal.hasSlowActivity() && !pageHidden && !offlineHint) {
+        collectServerDiagnostics("slow");
+        diagnosticPump = setTimeout(check, 10_000);
+      }
+    }, 3000);
 };
 function collectServerDiagnostics(trigger = "ready"): void {
   const client = diagnosticRuntime.clientId;
@@ -753,13 +775,19 @@ function collectServerDiagnostics(trigger = "ready"): void {
     serverDiagnosticInFlight = undefined;
     connectionDiagnostics.clearServerSnapshot();
   }
-  if (serverDiagnosticInFlight || Date.now() - lastServerDiagnosticAt < 5_000) return;
+  if (serverDiagnosticInFlight || Date.now() - lastServerDiagnosticAt < 5_000)
+    return;
   lastServerDiagnosticAt = Date.now();
-  const work = connectionDiagnostics.collect(diagnosticInput(), {
-    online: !offlineHint,
-    clientId: diagnosticRuntime.clientId,
-    trigger,
-  }).finally(() => { if (serverDiagnosticInFlight === work) serverDiagnosticInFlight = undefined; });
+  const work = connectionDiagnostics
+    .collect(diagnosticInput(), {
+      online: !offlineHint,
+      clientId: diagnosticRuntime.clientId,
+      trigger,
+    })
+    .finally(() => {
+      if (serverDiagnosticInFlight === work)
+        serverDiagnosticInFlight = undefined;
+    });
   serverDiagnosticInFlight = work;
 }
 
@@ -833,9 +861,15 @@ function scheduleHeartbeat(): void {
 }
 
 function updateLifecycle(): void {
-  diagnosticJournal.lifecycle("visibility", { hidden: pageHidden || pageFrozen, online: !offlineHint });
+  diagnosticJournal.lifecycle("visibility", {
+    hidden: pageHidden || pageFrozen,
+    online: !offlineHint,
+  });
   const paused =
     pageHidden || pageFrozen || (offlineHint && !manualNetworkOverride);
+  // A lifecycle reason can change while clocks remain paused (hidden+offline,
+  // or hidden+frozen). Always update admission before the no-transition return.
+  if (paused) suspendAppHostForLifecycle();
   // Returning to an offline page changes its notice even if transport stays
   // suspended. Keep the retry action available without restarting its budget.
   if (
@@ -858,7 +892,6 @@ function updateLifecycle(): void {
       window.clearTimeout(reconnectTimeoutId);
     }
     reconnectTimeoutId = null;
-    appHostRecovery.suspend();
     rpcLifecycle.suspend();
     connectionWatchdog?.suspend();
     transportWindow.suspend();
@@ -901,6 +934,18 @@ function updateLifecycle(): void {
   }
   renderRecoveryNotice();
   scheduleHeartbeat();
+}
+
+function suspendAppHostForLifecycle(): void {
+  appHostRecovery.suspend(
+    pageFrozen
+      ? "frozen"
+      : offlineHint && !manualNetworkOverride
+        ? "offline"
+        : socket?.readyState !== WebSocket.OPEN
+          ? "transport"
+          : "hidden",
+  );
 }
 
 function retryAfterOnline(): boolean {
@@ -1022,7 +1067,7 @@ function ensureSocket(): void {
     if (!transportSuspended) {
       appHostRecovery.resume();
       rpcLifecycle.resume();
-    }
+    } else suspendAppHostForLifecycle();
     opened = true;
     connectionDiagnostics.record("socket-open", {
       generation,
@@ -1139,9 +1184,16 @@ function invokeMain(
 ): Promise<unknown> {
   const requestId = nextRequestId();
   const diagnosticEvent = args[0] as any;
-  if (channel === "codex_desktop:message-from-view" && diagnosticEvent?.request?.id != null) {
-    diagnosticInvokes.set(requestId, { hostId: diagnosticEvent.hostId, id: diagnosticEvent.request.id });
-    if (diagnosticInvokes.size > 1000) diagnosticInvokes.delete(diagnosticInvokes.keys().next().value!);
+  if (
+    channel === "codex_desktop:message-from-view" &&
+    diagnosticEvent?.request?.id != null
+  ) {
+    diagnosticInvokes.set(requestId, {
+      hostId: diagnosticEvent.hostId,
+      id: diagnosticEvent.request.id,
+    });
+    if (diagnosticInvokes.size > 1000)
+      diagnosticInvokes.delete(diagnosticInvokes.keys().next().value!);
   }
   return new Promise((resolve, reject) => {
     const abort = () => {
@@ -1256,7 +1308,11 @@ const electronShim = (window.__ELECTRON_SHIM__ ??= {});
 electronShim.diagnosticRuntime = diagnosticRuntime;
 appHostRecovery.diagnosticObserver = diagnosticRuntime.appHost;
 const browserNotifications = installBrowserNotifications();
-const threadCache = createThreadCache({ onSync: showThreadCacheSync, onProjection: (host, thread, source) => diagnosticRuntime.projected(host, thread, source) });
+const threadCache = createThreadCache({
+  onSync: showThreadCacheSync,
+  onProjection: (host, thread, source) =>
+    diagnosticRuntime.projected(host, thread, source),
+});
 electronShim.threadCache = threadCache;
 electronShim.notifications = browserNotifications;
 let disposeNotificationSettings: (() => void) | undefined;
@@ -1272,7 +1328,9 @@ electronShim.mountNotificationSettings = (element, getSound, locale) => {
     : undefined;
 };
 electronShim.appServerRequestLifecycle = (event) => {
-  try { diagnosticRuntime.nativeEvent(event); } catch {}
+  try {
+    diagnosticRuntime.nativeEvent(event);
+  } catch {}
   rpcLifecycle.onLifecycle(event);
   appHostRecovery.observeNative(event);
 };
